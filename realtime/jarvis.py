@@ -1,0 +1,395 @@
+#!/usr/bin/env python3
+"""Jarvis Realtime : « Hey Jarvis » -> OpenAI Realtime -> haut-parleur du Pi.
+
+Usage :
+    python3 jarvis.py           # écoute le mot d'activation
+    python3 jarvis.py --direct  # démarre une conversation tout de suite (test)
+"""
+import asyncio
+import base64
+import json
+import logging
+import os
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+from websockets.asyncio.client import connect
+from wyoming.audio import AudioChunk, AudioStart
+from wyoming.client import AsyncTcpClient
+from wyoming.wake import Detect, Detection
+
+import ha_tools
+
+log = logging.getLogger("jarvis")
+
+MIC_RATE = 16000           # ReSpeaker / openwakeword
+API_RATE = 24000           # OpenAI Realtime (PCM 16 bits mono)
+CHUNK_BYTES = 2560         # 80 ms à 16 kHz
+JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+
+INSTRUCTIONS = """Tu es Jarvis, le majordome vocal de la maison de José.
+Tu parles toujours en français, avec le ton d'un majordome distingué, chaleureux et légèrement pince-sans-rire.
+Réponses très courtes : une ou deux phrases, pas de listes, jamais d'emojis.
+Le mot « Jarvis » au début de l'audio est le mot d'activation : ignore-le.
+Si l'audio n'est pas une demande claire d'un adulte (babillage de bébé, bruit, télévision, conversation qui ne t'est pas adressée), ne réponds rien et appelle fin_conversation.
+Quand on te remercie ou qu'on dit « c'est tout », « bonne nuit », etc., réponds en quelques mots puis appelle fin_conversation.
+Pour piloter la maison : utilise lister_appareils pour trouver l'entity_id exact (n'invente jamais d'entity_id), puis commander.
+Avant d'ouvrir la porte de garage, demande toujours confirmation.
+Nous sommes le {date}."""
+
+FIN_CONVERSATION = {
+    "type": "function",
+    "name": "fin_conversation",
+    "description": "Termine la conversation et retourne en veille.",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+def load_env(path=Path(__file__).with_name("config.env")):
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"'))
+
+
+def env(key, default=None):
+    return os.environ.get(key, default)
+
+
+def to_api_rate(pcm16k: bytes) -> bytes:
+    """Rééchantillonne 16 kHz -> 24 kHz (interpolation linéaire, très léger)."""
+    x = np.frombuffer(pcm16k, dtype=np.int16).astype(np.float32)
+    xi = np.linspace(0, len(x) - 1, len(x) * API_RATE // MIC_RATE)
+    return np.interp(xi, np.arange(len(x)), x).astype(np.int16).tobytes()
+
+
+def make_beep() -> bytes:
+    t = np.arange(int(API_RATE * 0.12)) / API_RATE
+    wave = np.sin(2 * np.pi * 880 * t) * np.minimum(1, np.minimum(t, t[::-1]) / 0.01)
+    return (wave * 8000).astype(np.int16).tobytes()
+
+
+class Player:
+    """Joue du PCM 24 kHz via aplay. stop() coupe net (interruption)."""
+
+    def __init__(self, device):
+        self.device = device
+        self.proc = None
+        self.queue = asyncio.Queue()
+        self.play_until = 0.0  # instant estimé de fin de lecture
+
+    def play(self, pcm: bytes):
+        now = time.monotonic()
+        self.play_until = max(now, self.play_until) + len(pcm) / (API_RATE * 2)
+        self.queue.put_nowait(pcm)
+
+    def is_playing(self, margin=0.3):
+        return time.monotonic() < self.play_until + margin
+
+    def stop(self):
+        while not self.queue.empty():
+            self.queue.get_nowait()
+        self.play_until = 0.0
+        if self.proc and self.proc.returncode is None:
+            self.proc.kill()
+        self.proc = None
+
+    async def run(self):
+        while True:
+            pcm = await self.queue.get()
+            try:
+                if self.proc is None or self.proc.returncode is not None:
+                    self.proc = await asyncio.create_subprocess_exec(
+                        "aplay", "-q", "-D", self.device, "-t", "raw", "-f", "S16_LE",
+                        "-r", str(API_RATE), "-c", "1",
+                        stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                proc = self.proc
+                proc.stdin.write(pcm)
+                await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                self.proc = None
+
+
+class Conversation:
+    """Une session OpenAI Realtime, du mot d'activation jusqu'au retour en veille."""
+
+    def __init__(self, app):
+        self.app = app
+        self.player = app.player
+        self.start = time.monotonic()
+        self.last_activity = self.start
+        self.heard_speech = False
+        self.responding = False
+        self.end_requested = False
+        self.item_id = None
+        self.item_start = 0.0
+        self.item_ms = 0.0
+
+    def session_config(self):
+        barge_in = env("BARGE_IN", "0") == "1"
+        now = datetime.now()
+        date = f"{JOURS[now.weekday()]} {now:%d/%m/%Y}, il est {now:%H:%M}"
+        return {
+            "type": "session.update",
+            "session": {
+                "type": "realtime",
+                "model": env("REALTIME_MODEL", "gpt-realtime-mini"),
+                "output_modalities": ["audio"],
+                "instructions": INSTRUCTIONS.format(date=date),
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": API_RATE},
+                        "noise_reduction": {"type": "far_field"},
+                        "transcription": {"model": "gpt-4o-mini-transcribe", "language": "fr"},
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.6,
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": int(env("VAD_SILENCE_MS", "500")),
+                            "create_response": True,
+                            "interrupt_response": barge_in,
+                        },
+                    },
+                    "output": {
+                        "format": {"type": "audio/pcm", "rate": API_RATE},
+                        "voice": env("VOICE", "cedar"),
+                    },
+                },
+                "tools": ha_tools.TOOLS + [FIN_CONVERSATION],
+                "tool_choice": "auto",
+            },
+        }
+
+    async def run(self):
+        url = "wss://api.openai.com/v1/realtime?model=" + env("REALTIME_MODEL", "gpt-realtime-mini")
+        headers = {"Authorization": "Bearer " + env("OPENAI_API_KEY", "")}
+        t0 = time.monotonic()
+        async with connect(url, additional_headers=headers, max_size=None, ping_interval=20) as ws:
+            await ws.send(json.dumps(self.session_config()))
+            log.info("Connecté à OpenAI en %.0f ms", (time.monotonic() - t0) * 1000)
+            tasks = [asyncio.create_task(c) for c in (self.send_audio(ws), self.receive(ws), self.watchdog())]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+            for t in done:
+                t.result()  # remonte l'erreur éventuelle
+
+    async def send_audio(self, ws):
+        barge_in = env("BARGE_IN", "0") == "1"
+        while True:
+            chunk = await self.app.convo_q.get()
+            if not barge_in and self.player.is_playing():
+                continue  # micro coupé pendant que Jarvis parle (évite qu'il s'entende)
+            audio = base64.b64encode(to_api_rate(chunk)).decode()
+            await ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": audio}))
+
+    async def receive(self, ws):
+        async for raw in ws:
+            ev = json.loads(raw)
+            t = ev.get("type", "")
+            if t in ("response.output_audio.delta", "response.audio.delta"):
+                if ev.get("item_id") != self.item_id:
+                    self.item_id = ev.get("item_id")
+                    self.item_start = max(time.monotonic(), self.player.play_until)
+                    self.item_ms = 0.0
+                pcm = base64.b64decode(ev["delta"])
+                self.player.play(pcm)
+                self.item_ms += len(pcm) / (API_RATE * 2) * 1000
+            elif t == "input_audio_buffer.speech_started":
+                self.heard_speech = True
+                self.last_activity = time.monotonic()
+                if self.player.is_playing(margin=0) and self.item_id:
+                    await self.interrupt(ws)
+            elif t == "input_audio_buffer.speech_stopped":
+                self.last_activity = time.monotonic()
+            elif t == "conversation.item.input_audio_transcription.completed":
+                log.info("Vous   : %s", ev.get("transcript", "").strip())
+            elif t in ("response.output_audio_transcript.done", "response.audio_transcript.done"):
+                log.info("Jarvis : %s", ev.get("transcript", "").strip())
+            elif t == "response.created":
+                self.responding = True
+            elif t == "response.done":
+                self.responding = False
+                self.last_activity = time.monotonic()
+                await self.handle_response_done(ws, ev.get("response", {}))
+            elif t == "error":
+                log.error("Erreur OpenAI : %s", ev.get("error", {}).get("message", ev))
+            else:
+                log.debug("Événement %s", t)
+
+    async def interrupt(self, ws):
+        played = min(self.item_ms, (time.monotonic() - self.item_start) * 1000)
+        self.player.stop()
+        log.info("Interrompu après %.1f s", played / 1000)
+        await ws.send(json.dumps({"type": "conversation.item.truncate", "item_id": self.item_id,
+                                  "content_index": 0, "audio_end_ms": int(max(0, played))}))
+
+    async def handle_response_done(self, ws, response):
+        if response.get("status") == "failed":
+            log.error("Réponse échouée : %s", response.get("status_details"))
+        usage = response.get("usage")
+        if usage:
+            log.debug("Jetons : %s", usage)
+        calls = [o for o in response.get("output", []) if o.get("type") == "function_call"]
+        need_followup = False
+        for call in calls:
+            name = call.get("name")
+            try:
+                args = json.loads(call.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            if name == "fin_conversation":
+                self.end_requested = True
+                result = {"ok": True}
+            else:
+                result = await asyncio.to_thread(ha_tools.execute, name, args)
+                need_followup = True
+            log.info("Outil  : %s(%s) -> %s", name, json.dumps(args, ensure_ascii=False),
+                     json.dumps(result, ensure_ascii=False)[:200])
+            await ws.send(json.dumps({"type": "conversation.item.create", "item": {
+                "type": "function_call_output", "call_id": call["call_id"],
+                "output": json.dumps(result, ensure_ascii=False)}}))
+        if need_followup and not self.end_requested:
+            await ws.send(json.dumps({"type": "response.create"}))
+
+    async def watchdog(self):
+        first_timeout = float(env("FIRST_SPEECH_TIMEOUT", "6"))
+        idle_timeout = float(env("IDLE_TIMEOUT", "8"))
+        max_session = float(env("MAX_SESSION", "300"))
+        while True:
+            await asyncio.sleep(0.25)
+            now = time.monotonic()
+            if self.player.is_playing() or self.responding:
+                self.last_activity = now
+                continue
+            if self.end_requested:
+                log.info("Fin de conversation demandée")
+                return
+            if not self.heard_speech and now - self.start > first_timeout:
+                log.info("Personne n'a parlé : fausse détection probable")
+                return
+            if now - self.last_activity > idle_timeout:
+                log.info("Silence : retour en veille")
+                return
+            if now - self.start > max_session:
+                log.warning("Durée max de session atteinte")
+                return
+
+
+class App:
+    def __init__(self, direct=False):
+        self.direct = direct
+        self.player = Player(env("SPEAKER_DEVICE", "default"))
+        self.state = "idle"
+        self.wake_q = asyncio.Queue(maxsize=50)
+        self.convo_q = asyncio.Queue(maxsize=200)
+        self.wake_event = asyncio.Event()
+        self.cooldown_until = 0.0
+
+    def on_mic(self, chunk):
+        q = self.wake_q if self.state == "idle" else self.convo_q
+        if q.full():
+            q.get_nowait()  # on jette le plus ancien plutôt que de bloquer
+        q.put_nowait(chunk)
+
+    def on_wake(self, name):
+        if self.state != "idle" or time.monotonic() < self.cooldown_until:
+            return
+        log.info("Mot d'activation détecté (%s)", name)
+        self.state = "convo"  # le micro bascule tout de suite vers la conversation
+        self.wake_event.set()
+
+    async def mic_loop(self):
+        device = env("MIC_DEVICE", "plughw:2,0")
+        while True:
+            proc = await asyncio.create_subprocess_exec(
+                "arecord", "-q", "-D", device, "-r", str(MIC_RATE), "-c", "1", "-f", "S16_LE", "-t", "raw",
+                stdout=asyncio.subprocess.PIPE)
+            log.info("Micro ouvert (%s)", device)
+            try:
+                while True:
+                    self.on_mic(await proc.stdout.readexactly(CHUNK_BYTES))
+            except asyncio.IncompleteReadError:
+                log.error("Le micro s'est arrêté (occupé par un autre programme ?). Nouvel essai dans 3 s")
+            finally:
+                if proc.returncode is None:
+                    proc.kill()
+            await asyncio.sleep(3)
+
+    async def wake_loop(self):
+        host, port = env("WAKE_HOST", "127.0.0.1"), int(env("WAKE_PORT", "10400"))
+        word = env("WAKE_WORD", "hey_jarvis")
+        while True:
+            try:
+                async with AsyncTcpClient(host, port) as client:
+                    await client.write_event(Detect(names=[word]).event())
+                    await client.write_event(AudioStart(rate=MIC_RATE, width=2, channels=1).event())
+                    log.info("Connecté à openwakeword (%s:%s), en attente de « %s »", host, port, word)
+                    reader = asyncio.create_task(self.read_detections(client))
+                    while not reader.done():
+                        chunk = await self.wake_q.get()
+                        await client.write_event(
+                            AudioChunk(rate=MIC_RATE, width=2, channels=1, audio=chunk).event())
+                    reader.result()
+            except Exception as e:
+                log.error("openwakeword injoignable (%s), nouvel essai dans 5 s", e)
+                await asyncio.sleep(5)
+
+    async def read_detections(self, client):
+        while True:
+            event = await client.read_event()
+            if event is None:
+                raise ConnectionError("connexion fermée")
+            if Detection.is_type(event.type):
+                self.on_wake(Detection.from_event(event).name)
+
+    async def run(self):
+        background = [asyncio.create_task(self.mic_loop()), asyncio.create_task(self.player.run())]
+        if not self.direct:
+            background.append(asyncio.create_task(self.wake_loop()))
+        beep = make_beep() if env("BEEP", "1") == "1" else None
+        while True:
+            if self.direct:
+                self.state = "convo"
+                log.info("Mode direct : parlez !")
+            else:
+                await self.wake_event.wait()
+                self.wake_event.clear()
+            if beep:
+                self.player.play(beep)
+            try:
+                await Conversation(self).run()
+            except Exception as e:
+                log.error("Conversation interrompue : %s", e)
+            finally:
+                await asyncio.sleep(0.5)
+                self.player.stop()
+                while not self.convo_q.empty():
+                    self.convo_q.get_nowait()
+                self.state = "idle"
+                self.cooldown_until = time.monotonic() + 2
+                log.info("En veille")
+            if self.direct:
+                return
+
+
+def main():
+    load_env()
+    logging.basicConfig(level=env("LOG_LEVEL", "INFO"),
+                        format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+    if not env("OPENAI_API_KEY", "").startswith("sk-"):
+        sys.exit("OPENAI_API_KEY manquante dans config.env")
+    try:
+        asyncio.run(App(direct="--direct" in sys.argv).run())
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
