@@ -118,9 +118,10 @@ if __name__ == "__main__":
             cost = (time.monotonic() - t) * 1000
             best = max(best, det.score)
             if hit:
-                print(f"\n*** DÉTECTÉ (score {det.score:.2f}) ***")
+                print(f"*** DÉTECTÉ (score {det.score:.2f}) ***", flush=True)
             if t - t_last > 1:
-                print(f"score {det.score:.2f}  max 1s {best:.2f}  calcul {cost:.0f} ms / 80 ms", end="\r")
+                bar = "#" * int(best * 40)
+                print(f"max 1s {best:.2f} {bar:<40} calcul {cost:.0f} ms / 80 ms", flush=True)
                 best, t_last = 0.0, t
     except KeyboardInterrupt:
         proc.kill()
