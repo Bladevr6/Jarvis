@@ -23,6 +23,7 @@ import numpy as np
 from websockets.asyncio.client import connect
 from wyoming.audio import AudioChunk, AudioStart
 from wyoming.client import AsyncTcpClient
+from wyoming.info import Describe, Info
 from wyoming.wake import Detect, Detection
 
 import ha_tools
@@ -433,9 +434,19 @@ class App:
                 self.wake_q.get_nowait()
             try:
                 async with AsyncTcpClient(host, port) as client:
+                    # On attend que le serveur réponde (modèle chargé) avant d'envoyer du son
+                    await client.write_event(Describe().event())
+                    info = await asyncio.wait_for(client.read_event(), timeout=30)
+                    if info is None or not Info.is_type(info.type):
+                        raise ConnectionError("pas de réponse à Describe")
+                    models = [m.name for w in Info.from_event(info).wake for m in w.models]
+                    if word not in models:
+                        log.warning("Modèle « %s » absent, modèles disponibles : %s", word, models)
                     await client.write_event(Detect(names=[word]).event())
                     await client.write_event(AudioStart(rate=MIC_RATE, width=2, channels=1).event())
-                    log.info("Connecté à openwakeword (%s:%s), en attente de « %s »", host, port, word)
+                    while not self.wake_q.empty():
+                        self.wake_q.get_nowait()  # on jette le son accumulé pendant l'attente
+                    log.info("Prêt : dites « Hey Jarvis » (openwakeword %s:%s, modèle %s)", host, port, word)
                     reader = asyncio.create_task(self.read_detections(client))
                     sent, last = 0, time.monotonic()
                     while not reader.done():
