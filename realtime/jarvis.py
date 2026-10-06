@@ -37,7 +37,7 @@ JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"
 INSTRUCTIONS = """Tu es Jarvis, le majordome vocal de la maison de José.
 Tu parles toujours en français, avec le ton d'un majordome distingué, chaleureux et légèrement pince-sans-rire.
 Réponses très courtes : une ou deux phrases, pas de listes, jamais d'emojis.
-Le mot « Jarvis » au début de l'audio est le mot d'activation : ignore-le.
+Le mot « Hey Jarvis » au début de l'audio est le mot d'activation : ignore-le. Si l'utilisateur n'a dit que cela, réponds seulement « Oui ? ».
 Si l'audio n'est pas une demande claire d'un adulte (babillage de bébé, bruit, télévision, conversation qui ne t'est pas adressée), ne réponds rien et appelle fin_conversation.
 Quand on te remercie ou qu'on dit « c'est tout », « bonne nuit », etc., réponds en quelques mots puis appelle fin_conversation.
 Pour piloter la maison : utilise lister_appareils pour trouver les entity_id exacts (n'invente jamais d'entity_id), puis commander.
@@ -258,9 +258,12 @@ class Conversation:
             await ws.send(json.dumps(self.session_config()))
             log.info("Connecté à OpenAI en %.0f ms", (time.monotonic() - t0) * 1000)
             tasks = [asyncio.create_task(c) for c in (self.send_audio(ws), self.receive(ws), self.watchdog())]
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for t in pending:
-                t.cancel()
+            try:
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
             for t in done:
                 t.result()  # remonte l'erreur éventuelle
 
@@ -477,6 +480,8 @@ def main():
     load_env()
     logging.basicConfig(level=env("LOG_LEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+    for noisy in ("websockets", "urllib3", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     if not env("OPENAI_API_KEY", "").startswith("sk-"):
         sys.exit("OPENAI_API_KEY manquante dans config.env")
     try:
