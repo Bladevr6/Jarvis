@@ -381,8 +381,12 @@ class App:
         self.convo_q = asyncio.Queue(maxsize=200)
         self.wake_event = asyncio.Event()
         self.cooldown_until = 0.0
+        self.gain = float(env("MIC_GAIN", "2.5"))
 
     def on_mic(self, chunk):
+        if self.gain != 1.0:  # le ReSpeaker sort un signal faible : amplification numérique
+            x = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) * self.gain
+            chunk = np.clip(x, -32768, 32767).astype(np.int16).tobytes()
         # Le détecteur reçoit le son en continu (les trous le perturbent) ;
         # pendant une conversation, le son part aussi vers OpenAI.
         queues = [self.wake_q] if self.state == "idle" else [self.wake_q, self.convo_q]
