@@ -115,7 +115,6 @@ def bench():
 if __name__ == "__main__":
     # Test en direct : affiche le score à chaque instant et signale les détections
     import faulthandler
-    faulthandler.dump_traceback_later(15, repeat=True)  # mouchard : où en est-on toutes les 15 s
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if "--bench" in sys.argv:
         bench()
@@ -129,7 +128,7 @@ if __name__ == "__main__":
     print("Micro lancé, chargement des modèles...", flush=True)
     det = WakeDetector(threshold=float(env("WAKE_THRESHOLD", "0.5")))
     print("Dites « Hey Jarvis ». Score en direct (seuil %.2f). Ctrl+C pour quitter." % det.threshold, flush=True)
-    best, t_last, total = 0.0, time.monotonic(), 0
+    best, t_last, total, peak = 0.0, time.monotonic(), 0, 0
     try:
         while True:
             pcm = os.read(fd, CHUNK * 2)
@@ -137,6 +136,7 @@ if __name__ == "__main__":
                 print("arecord s'est arrêté", flush=True)
                 break
             total += len(pcm)
+            peak = max(peak, int(np.abs(np.frombuffer(pcm, dtype=np.int16)).max()))
             t = time.monotonic()
             hit = det.process(pcm)
             cost = (time.monotonic() - t) * 1000
@@ -145,7 +145,7 @@ if __name__ == "__main__":
                 print(f"*** DÉTECTÉ (score {det.score:.2f}) ***", flush=True)
             if t - t_last > 1:
                 bar = "#" * int(best * 40)
-                print(f"max 1s {best:.2f} {bar:<40} calcul {cost:.0f} ms  audio reçu {total // 32000} s", flush=True)
-                best, t_last = 0.0, t
+                print(f"score {best:.2f} {bar:<40} niveau micro {peak:5d}  calcul {cost:.0f} ms", flush=True)
+                best, t_last, peak = 0.0, t, 0
     except KeyboardInterrupt:
         proc.kill()
