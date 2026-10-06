@@ -429,6 +429,33 @@ class App:
         await asyncio.sleep(4)
 
     async def wake_loop(self):
+        if env("WAKE_MODE", "local") == "local":
+            await self.wake_loop_local()
+        else:
+            await self.wake_loop_wyoming()
+
+    async def wake_loop_local(self):
+        """Détection dans le script (onnxruntime), sans conteneur Docker."""
+        import wake
+        word = env("WAKE_WORD", "hey_jarvis")
+        model = word if word.endswith(("_v0.1", ".onnx")) else word + "_v0.1"
+        det = await asyncio.to_thread(wake.WakeDetector, model.removesuffix(".onnx"),
+                                      float(env("WAKE_THRESHOLD", "0.5")))
+        while not self.wake_q.empty():
+            self.wake_q.get_nowait()
+        log.info("Prêt : dites « Hey Jarvis » (détection locale, modèle %s, seuil %s)", det.name, det.threshold)
+        n, best, last = 0, 0.0, time.monotonic()
+        while True:
+            chunk = await self.wake_q.get()
+            if await asyncio.to_thread(det.process, chunk):
+                self.on_wake(f"{det.name} score {det.score:.2f}")
+            n += 1
+            best = max(best, det.score)
+            if time.monotonic() - last > 10:
+                log.debug("Veille : %d chunks analysés, meilleur score %.2f, état %s", n, best, self.state)
+                best, last = 0.0, time.monotonic()
+
+    async def wake_loop_wyoming(self):
         host, port = env("WAKE_HOST", "127.0.0.1"), int(env("WAKE_PORT", "10400"))
         word = env("WAKE_WORD", "hey_jarvis")
         while True:

@@ -1,6 +1,6 @@
 [Unit]
 Description=Jarvis Realtime (mot d'activation + OpenAI Realtime)
-After=network-online.target docker.service
+After=network-online.target
 Wants=network-online.target
 Conflicts=wyoming-satellite.service
 
