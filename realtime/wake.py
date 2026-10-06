@@ -114,6 +114,8 @@ def bench():
 
 if __name__ == "__main__":
     # Test en direct : affiche le score à chaque instant et signale les détections
+    import faulthandler
+    faulthandler.dump_traceback_later(15, repeat=True)  # mouchard : où en est-on toutes les 15 s
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if "--bench" in sys.argv:
         bench()
@@ -121,14 +123,20 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent))
     from jarvis import load_env, env
     load_env()
-    det = WakeDetector(threshold=float(env("WAKE_THRESHOLD", "0.5")))
     proc = subprocess.Popen(["arecord", "-q", "-D", env("MIC_DEVICE", "plughw:2,0"), "-r", "16000",
                              "-c", "1", "-f", "S16_LE", "-t", "raw"], stdout=subprocess.PIPE)
-    print("Dites « Hey Jarvis ». Score en direct (seuil %.2f). Ctrl+C pour quitter." % det.threshold)
-    best, t_last, t0 = 0.0, time.monotonic(), time.monotonic()
+    fd = proc.stdout.fileno()
+    print("Micro lancé, chargement des modèles...", flush=True)
+    det = WakeDetector(threshold=float(env("WAKE_THRESHOLD", "0.5")))
+    print("Dites « Hey Jarvis ». Score en direct (seuil %.2f). Ctrl+C pour quitter." % det.threshold, flush=True)
+    best, t_last, total = 0.0, time.monotonic(), 0
     try:
         while True:
-            pcm = proc.stdout.read(CHUNK * 2)
+            pcm = os.read(fd, CHUNK * 2)
+            if not pcm:
+                print("arecord s'est arrêté", flush=True)
+                break
+            total += len(pcm)
             t = time.monotonic()
             hit = det.process(pcm)
             cost = (time.monotonic() - t) * 1000
@@ -137,7 +145,7 @@ if __name__ == "__main__":
                 print(f"*** DÉTECTÉ (score {det.score:.2f}) ***", flush=True)
             if t - t_last > 1:
                 bar = "#" * int(best * 40)
-                print(f"max 1s {best:.2f} {bar:<40} calcul {cost:.0f} ms / 80 ms", flush=True)
+                print(f"max 1s {best:.2f} {bar:<40} calcul {cost:.0f} ms  audio reçu {total // 32000} s", flush=True)
                 best, t_last = 0.0, t
     except KeyboardInterrupt:
         proc.kill()
