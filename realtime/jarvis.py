@@ -418,10 +418,17 @@ class App:
                     await client.write_event(AudioStart(rate=MIC_RATE, width=2, channels=1).event())
                     log.info("Connecté à openwakeword (%s:%s), en attente de « %s »", host, port, word)
                     reader = asyncio.create_task(self.read_detections(client))
+                    sent, last = 0, time.monotonic()
                     while not reader.done():
                         chunk = await self.wake_q.get()
                         await client.write_event(
                             AudioChunk(rate=MIC_RATE, width=2, channels=1, audio=chunk).event())
+                        sent += 1
+                        if time.monotonic() - last > 10:
+                            peak = int(np.abs(np.frombuffer(chunk, dtype=np.int16)).max())
+                            log.debug("Veille : %d chunks envoyés à openwakeword, niveau %d, état %s",
+                                      sent, peak, self.state)
+                            last = time.monotonic()
                     reader.result()
             except Exception as e:
                 log.error("openwakeword injoignable (%s), nouvel essai dans 5 s", e)
@@ -432,6 +439,7 @@ class App:
             event = await client.read_event()
             if event is None:
                 raise ConnectionError("connexion fermée")
+            log.debug("openwakeword -> %s %s", event.type, event.data)
             if Detection.is_type(event.type):
                 self.on_wake(Detection.from_event(event).name)
 
