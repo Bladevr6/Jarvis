@@ -10,8 +10,12 @@ import base64
 import json
 import logging
 import os
+import socket
+import struct
 import sys
+import threading
 import time
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime
 from pathlib import Path
 
@@ -116,6 +120,77 @@ class Player:
                 self.proc = None
 
 
+class SonosPlayer:
+    """Mode temporaire : accumule la réponse, l'écrit en WAV, et demande au Sonos de la lire
+    via Home Assistant. Le Sonos vient chercher le fichier sur un petit serveur HTTP du Pi."""
+
+    PORT = 8800
+    FETCH_DELAY = 1.5  # temps estimé avant que le Sonos commence à jouer
+
+    def __init__(self, entity_id):
+        self.entity_id = entity_id
+        self.buffer = bytearray()
+        self.play_until = 0.0
+        self.counter = 0
+        self.www = Path(__file__).with_name("www")
+        self.www.mkdir(exist_ok=True)
+        self.ip = self._local_ip()
+        handler = lambda *a, **k: SimpleHTTPRequestHandler(*a, directory=str(self.www), **k)
+        handler.log_message = lambda *a: None
+        self.server = ThreadingHTTPServer(("0.0.0.0", self.PORT), handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        log.info("Sortie Sonos (%s), serveur audio sur http://%s:%s", entity_id, self.ip, self.PORT)
+
+    @staticmethod
+    def _local_ip():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+
+    def play(self, pcm: bytes):
+        self.buffer += pcm
+
+    def is_playing(self, margin=0.3):
+        return bool(self.buffer) or time.monotonic() < self.play_until + margin
+
+    def stop(self):
+        self.buffer = bytearray()
+        self.play_until = 0.0
+
+    def flush(self):
+        """Appelé à la fin d'une réponse : envoie le WAV au Sonos."""
+        if not self.buffer:
+            return
+        pcm = bytes(self.buffer)
+        self.buffer = bytearray()
+        self.counter += 1
+        name = f"reponse_{self.counter % 5}.wav"
+        header = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(pcm), b"WAVE", b"fmt ", 16, 1, 1,
+                             API_RATE, API_RATE * 2, 2, 16, b"data", len(pcm))
+        (self.www / name).write_bytes(header + pcm)
+        duration = len(pcm) / (API_RATE * 2)
+        self.play_until = time.monotonic() + self.FETCH_DELAY + duration
+        url = f"http://{self.ip}:{self.PORT}/{name}?t={self.counter}"
+        try:
+            ha_tools._ha("POST", "/api/services/media_player/play_media", {
+                "entity_id": self.entity_id, "media_content_id": url,
+                "media_content_type": "music", "announce": True})
+        except Exception as e:
+            log.error("Lecture Sonos impossible : %s", e)
+
+    async def run(self):
+        await asyncio.Event().wait()
+
+
+def make_player(device):
+    if device.startswith("sonos:"):
+        return SonosPlayer(device.split(":", 1)[1])
+    return Player(device)
+
+
 class Conversation:
     """Une session OpenAI Realtime, du mot d'activation jusqu'au retour en veille."""
 
@@ -216,6 +291,8 @@ class Conversation:
                 self.responding = True
             elif t == "response.done":
                 self.responding = False
+                if isinstance(self.player, SonosPlayer):
+                    await asyncio.to_thread(self.player.flush)
                 self.last_activity = time.monotonic()
                 await self.handle_response_done(ws, ev.get("response", {}))
             elif t == "error":
@@ -285,7 +362,7 @@ class Conversation:
 class App:
     def __init__(self, direct=False):
         self.direct = direct
-        self.player = Player(env("SPEAKER_DEVICE", "default"))
+        self.player = make_player(env("SPEAKER_DEVICE", "default"))
         self.state = "idle"
         self.wake_q = asyncio.Queue(maxsize=50)
         self.convo_q = asyncio.Queue(maxsize=200)
@@ -361,7 +438,7 @@ class App:
             else:
                 await self.wake_event.wait()
                 self.wake_event.clear()
-            if beep:
+            if beep and not isinstance(self.player, SonosPlayer):
                 self.player.play(beep)
             try:
                 await Conversation(self).run()
