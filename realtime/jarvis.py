@@ -411,10 +411,26 @@ class App:
                     proc.kill()
             await asyncio.sleep(3)
 
+    async def restart_wake_server(self):
+        """Le conteneur openwakeword se coince parfois après une déconnexion : on le relance."""
+        cmd = env("WAKE_RESTART_CMD", "")
+        if not cmd:
+            return
+        log.info("Redémarrage d'openwakeword (%s)", cmd)
+        proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.DEVNULL,
+                                                     stderr=asyncio.subprocess.PIPE)
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            log.warning("Échec du redémarrage : %s", err.decode().strip())
+        await asyncio.sleep(4)
+
     async def wake_loop(self):
         host, port = env("WAKE_HOST", "127.0.0.1"), int(env("WAKE_PORT", "10400"))
         word = env("WAKE_WORD", "hey_jarvis")
         while True:
+            await self.restart_wake_server()
+            while not self.wake_q.empty():
+                self.wake_q.get_nowait()
             try:
                 async with AsyncTcpClient(host, port) as client:
                     await client.write_event(Detect(names=[word]).event())
