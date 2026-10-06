@@ -40,8 +40,10 @@ Réponses très courtes : une ou deux phrases, pas de listes, jamais d'emojis.
 Le mot « Jarvis » au début de l'audio est le mot d'activation : ignore-le.
 Si l'audio n'est pas une demande claire d'un adulte (babillage de bébé, bruit, télévision, conversation qui ne t'est pas adressée), ne réponds rien et appelle fin_conversation.
 Quand on te remercie ou qu'on dit « c'est tout », « bonne nuit », etc., réponds en quelques mots puis appelle fin_conversation.
-Pour piloter la maison : utilise lister_appareils pour trouver l'entity_id exact (n'invente jamais d'entity_id), puis commander.
-Avant d'ouvrir la porte de garage, demande toujours confirmation.
+Pour piloter la maison : utilise lister_appareils pour trouver les entity_id exacts (n'invente jamais d'entity_id), puis commander.
+Agis immédiatement, sans demander de confirmation ni de précision inutile : « éteins la cuisine » veut dire toutes les lumières de la cuisine, en un seul appel à commander avec la liste des entity_id.
+La seule exception : avant d'ouvrir la porte de garage, demande confirmation.
+Après une action, confirme en trois ou quatre mots (« C'est fait. », « Salon éteint. »).
 Nous sommes le {date}."""
 
 FIN_CONVERSATION = {
@@ -135,9 +137,16 @@ class SonosPlayer:
         self.www = Path(__file__).with_name("www")
         self.www.mkdir(exist_ok=True)
         self.ip = self._local_ip()
-        handler = lambda *a, **k: SimpleHTTPRequestHandler(*a, directory=str(self.www), **k)
-        handler.log_message = lambda *a: None
-        self.server = ThreadingHTTPServer(("0.0.0.0", self.PORT), handler)
+        www = str(self.www)
+
+        class Handler(SimpleHTTPRequestHandler):
+            def __init__(self, *a, **k):
+                super().__init__(*a, directory=www, **k)
+
+            def log_message(self, *a):
+                pass
+
+        self.server = ThreadingHTTPServer(("0.0.0.0", self.PORT), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         log.info("Sortie Sonos (%s), serveur audio sur http://%s:%s", entity_id, self.ip, self.PORT)
 

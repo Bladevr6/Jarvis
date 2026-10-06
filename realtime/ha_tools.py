@@ -56,15 +56,16 @@ def etat(entity_id):
 def commander(domaine, service, entity_id, donnees=None, confirme=False):
     if service not in ALLOWED_SERVICES.get(domaine, set()):
         return {"erreur": f"service {domaine}.{service} non autorisé"}
-    if not entity_id.startswith(domaine + "."):
+    ids = [entity_id] if isinstance(entity_id, str) else list(entity_id)
+    if not ids or not all(i.startswith(domaine + ".") for i in ids):
         return {"erreur": "entity_id ne correspond pas au domaine"}
-    if domaine == "cover" and "garage" in entity_id and service == "open_cover" and not confirme:
+    if domaine == "cover" and service == "open_cover" and any("garage" in i for i in ids) and not confirme:
         return {"erreur": "Confirmation requise : demande à l'utilisateur s'il confirme "
                           "l'ouverture du garage, puis rappelle avec confirme=true."}
     payload = dict(donnees or {})
-    payload["entity_id"] = entity_id
+    payload["entity_id"] = ids
     _ha("POST", f"/api/services/{domaine}/{service}", payload)
-    return {"ok": True}
+    return {"ok": True, "appareils": len(ids)}
 
 
 TOOLS = [
@@ -103,7 +104,8 @@ TOOLS = [
             "properties": {
                 "domaine": {"type": "string", "enum": sorted(ALLOWED_SERVICES)},
                 "service": {"type": "string"},
-                "entity_id": {"type": "string"},
+                "entity_id": {"type": "array", "items": {"type": "string"},
+                              "description": "Un ou plusieurs entity_id (toutes les lampes d'une pièce en un seul appel)"},
                 "donnees": {"type": "object", "description": "Paramètres optionnels du service"},
                 "confirme": {"type": "boolean", "description": "true seulement si l'utilisateur a confirmé"},
             },
