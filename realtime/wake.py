@@ -99,9 +99,25 @@ class WakeDetector:
         return detected
 
 
+def bench():
+    """python3 wake.py --bench : chronomètre chaque étape, sans micro."""
+    t = time.time()
+    det = WakeDetector()
+    print(f"chargement des modèles : {time.time() - t:.1f} s", flush=True)
+    rng = np.random.default_rng(0)
+    for i in range(12):
+        chunk = (rng.standard_normal(CHUNK) * 500).astype(np.int16).tobytes()
+        t = time.time()
+        det.process(chunk)
+        print(f"chunk {i + 1:2d} : {(time.time() - t) * 1000:6.0f} ms  (budget 80 ms)", flush=True)
+
+
 if __name__ == "__main__":
     # Test en direct : affiche le score à chaque instant et signale les détections
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if "--bench" in sys.argv:
+        bench()
+        sys.exit()
     sys.path.insert(0, str(Path(__file__).parent))
     from jarvis import load_env, env
     load_env()
