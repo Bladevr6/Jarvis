@@ -383,10 +383,13 @@ class App:
         self.cooldown_until = 0.0
 
     def on_mic(self, chunk):
-        q = self.wake_q if self.state == "idle" else self.convo_q
-        if q.full():
-            q.get_nowait()  # on jette le plus ancien plutôt que de bloquer
-        q.put_nowait(chunk)
+        # Le détecteur reçoit le son en continu (les trous le perturbent) ;
+        # pendant une conversation, le son part aussi vers OpenAI.
+        queues = [self.wake_q] if self.state == "idle" else [self.wake_q, self.convo_q]
+        for q in queues:
+            if q.full():
+                q.get_nowait()  # on jette le plus ancien plutôt que de bloquer
+            q.put_nowait(chunk)
 
     def on_wake(self, name):
         if self.state != "idle" or time.monotonic() < self.cooldown_until:
