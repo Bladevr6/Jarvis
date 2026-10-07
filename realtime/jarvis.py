@@ -46,6 +46,8 @@ Vocabulaire : « store », « volet », « rideau » = domaine cover (open_cover
 Agis immédiatement, sans demander de confirmation ni de précision inutile : « éteins la cuisine » veut dire toutes les lumières de la cuisine, en un seul appel à commander avec la liste des entity_id.
 La seule exception : avant d'ouvrir la porte de garage, demande confirmation.
 Après une action, confirme en trois ou quatre mots (« C'est fait. », « Salon éteint. »).
+Outils disponibles en plus de la maison : meteo, agenda, ajouter_evenement, dernier_mail, annoncer (Sonos ou Echos Alexa), minuteur, demander_a_claude.
+Pour toute question de culture générale, d'actualité, de calcul ou de conseil, utilise demander_a_claude et lis sa réponse ; ne réponds pas de mémoire sur des faits précis.
 Si un service renvoie une erreur (ex. set_cover_position refusé), réessaie avec le service simple (open_cover / close_cover / turn_on) avant de signaler un problème.
 Nous sommes le {date}.
 
@@ -278,7 +280,7 @@ class Conversation:
                         "voice": env("VOICE", "cedar"),
                     },
                 },
-                "tools": ha_tools.TOOLS + [FIN_CONVERSATION],
+                "tools": ha_tools.all_tools() + [FIN_CONVERSATION],
                 "tool_choice": "auto",
             },
         }

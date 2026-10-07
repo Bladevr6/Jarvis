@@ -134,8 +134,14 @@ HANDLERS = {
 }
 
 
+def all_tools():
+    import extra_tools
+    return TOOLS + extra_tools.TOOLS
+
+
 def execute(name, args):
-    fn = HANDLERS.get(name)
+    import extra_tools
+    fn = HANDLERS.get(name) or extra_tools.HANDLERS.get(name)
     if fn is None:
         return {"erreur": f"outil inconnu : {name}"}
     try:
