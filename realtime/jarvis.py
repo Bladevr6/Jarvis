@@ -128,17 +128,18 @@ class SonosPlayer:
     via Home Assistant. Le Sonos vient chercher le fichier sur un petit serveur HTTP du Pi."""
 
     PORT = 8800
-    FETCH_DELAY = 1.5  # temps estimé avant que le Sonos commence à jouer
 
     def __init__(self, entity_id):
         self.entity_id = entity_id
         self.buffer = bytearray()
         self.play_until = 0.0
         self.counter = 0
+        self.awaiting = {}  # fichier -> durée, en attente que le Sonos vienne le chercher
         self.www = Path(__file__).with_name("www")
         self.www.mkdir(exist_ok=True)
         self.ip = self._local_ip()
         www = str(self.www)
+        player = self
 
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *a, **k):
@@ -146,6 +147,10 @@ class SonosPlayer:
 
             def log_message(self, *a):
                 pass
+
+            def do_GET(self):
+                player.on_fetch(self.path.split("?")[0].lstrip("/"))
+                super().do_GET()
 
         self.server = ThreadingHTTPServer(("0.0.0.0", self.PORT), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -182,7 +187,10 @@ class SonosPlayer:
                              API_RATE, API_RATE * 2, 2, 16, b"data", len(pcm))
         (self.www / name).write_bytes(header + pcm)
         duration = len(pcm) / (API_RATE * 2)
-        self.play_until = time.monotonic() + self.FETCH_DELAY + duration
+        # Micro coupé au plus 5 s en attendant que le Sonos vienne chercher le fichier ;
+        # on_fetch recale ensuite précisément sur l'instant réel de lecture.
+        self.awaiting = {name: duration}
+        self.play_until = time.monotonic() + 5
         url = f"http://{self.ip}:{self.PORT}/{name}?t={self.counter}"
         try:
             ha_tools._ha("POST", "/api/services/media_player/play_media", {
@@ -190,6 +198,12 @@ class SonosPlayer:
                 "media_content_type": "music", "announce": True})
         except Exception as e:
             log.error("Lecture Sonos impossible : %s", e)
+
+    def on_fetch(self, name):
+        duration = self.awaiting.pop(name, None)
+        if duration is not None:
+            self.play_until = time.monotonic() + duration + 0.4
+            log.debug("Sonos lit %s (%.1f s)", name, duration)
 
     async def run(self):
         await asyncio.Event().wait()
