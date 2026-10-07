@@ -41,11 +41,15 @@ Réponses très courtes : une ou deux phrases, pas de listes, jamais d'emojis.
 Le mot « Hey Jarvis » au début de l'audio est le mot d'activation : ignore-le. Si l'utilisateur n'a dit que cela, réponds seulement « Oui ? ».
 Si l'audio n'est pas une demande claire d'un adulte (babillage de bébé, bruit, télévision, conversation qui ne t'est pas adressée), ne réponds rien et appelle fin_conversation.
 Quand on te remercie ou qu'on dit « c'est tout », « bonne nuit », etc., réponds en quelques mots puis appelle fin_conversation.
-Pour piloter la maison : utilise lister_appareils pour trouver les entity_id exacts (n'invente jamais d'entity_id), puis commander.
+Pour piloter la maison, utilise l'outil commander avec les entity_id de l'inventaire ci-dessous (n'invente jamais d'entity_id ; lister_appareils sert seulement si un appareil manque).
+Vocabulaire : « store », « volet », « rideau » = domaine cover (open_cover = ouvrir/monter, close_cover = fermer/baisser) ; « lumière », « lampe » = domaine light.
 Agis immédiatement, sans demander de confirmation ni de précision inutile : « éteins la cuisine » veut dire toutes les lumières de la cuisine, en un seul appel à commander avec la liste des entity_id.
 La seule exception : avant d'ouvrir la porte de garage, demande confirmation.
 Après une action, confirme en trois ou quatre mots (« C'est fait. », « Salon éteint. »).
-Nous sommes le {date}."""
+Nous sommes le {date}.
+
+Inventaire de la maison (entity_id | nom | pièce | état) :
+{inventaire}"""
 
 FIN_CONVERSATION = {
     "type": "function",
@@ -231,7 +235,7 @@ class Conversation:
         self.item_ms = 0.0
         self.recording = bytearray()
 
-    def session_config(self):
+    def session_config(self, inventaire=""):
         barge_in = env("BARGE_IN", "0") == "1"
         now = datetime.now()
         date = f"{JOURS[now.weekday()]} {now:%d/%m/%Y}, il est {now:%H:%M}"
@@ -241,7 +245,7 @@ class Conversation:
                 "type": "realtime",
                 "model": env("REALTIME_MODEL", "gpt-realtime-mini"),
                 "output_modalities": ["audio"],
-                "instructions": INSTRUCTIONS.format(date=date),
+                "instructions": INSTRUCTIONS.format(date=date, inventaire=inventaire),
                 "audio": {
                     "input": {
                         "format": {"type": "audio/pcm", "rate": API_RATE},
@@ -249,7 +253,7 @@ class Conversation:
                         "transcription": {"model": "gpt-4o-mini-transcribe", "language": "fr"},
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": 0.6,
+                            "threshold": 0.5,
                             "prefix_padding_ms": 300,
                             "silence_duration_ms": int(env("VAD_SILENCE_MS", "500")),
                             "create_response": True,
@@ -270,8 +274,18 @@ class Conversation:
         url = "wss://api.openai.com/v1/realtime?model=" + env("REALTIME_MODEL", "gpt-realtime-mini")
         headers = {"Authorization": "Bearer " + env("OPENAI_API_KEY", "")}
         t0 = time.monotonic()
-        async with connect(url, additional_headers=headers, max_size=None, ping_interval=20) as ws:
-            await ws.send(json.dumps(self.session_config()))
+
+        async def fetch_inventory():
+            try:
+                return await asyncio.to_thread(ha_tools.inventaire)
+            except Exception as e:
+                log.warning("Inventaire HA indisponible : %s", e)
+                return "(indisponible, utilise lister_appareils)"
+
+        ws, inventaire = await asyncio.gather(
+            connect(url, additional_headers=headers, max_size=None, ping_interval=20), fetch_inventory())
+        async with ws:
+            await ws.send(json.dumps(self.session_config(inventaire)))
             log.info("Connecté à OpenAI en %.0f ms", (time.monotonic() - t0) * 1000)
             tasks = [asyncio.create_task(c) for c in (self.send_audio(ws), self.receive(ws), self.watchdog())]
             try:

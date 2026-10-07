@@ -46,6 +46,19 @@ def lister_appareils(domaine, filtre=""):
     return {"format": "entity_id | nom | état | pièce", "appareils": lines[:MAX_LINES]}
 
 
+INVENTORY_DOMAINS = ["light", "cover", "switch", "scene", "script", "media_player", "climate", "fan"]
+
+
+def inventaire():
+    """Texte compact de tous les appareils pilotables, injecté dans les consignes du modèle."""
+    template = "".join(
+        "{%- for s in states." + d + " -%}"
+        "{{ s.entity_id }} | {{ s.name }} | {{ area_name(s.entity_id) or '?' }} | {{ s.state }}\n"
+        "{% endfor -%}" for d in INVENTORY_DOMAINS)
+    lines = [l for l in _ha("POST", "/api/template", {"template": template}).text.splitlines() if l.strip()]
+    return "\n".join(lines[:150])
+
+
 def etat(entity_id):
     s = _ha("GET", f"/api/states/{entity_id}").json()
     attrs = {k: v for k, v in s.get("attributes", {}).items()
