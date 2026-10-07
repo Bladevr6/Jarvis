@@ -229,6 +229,7 @@ class Conversation:
         self.item_id = None
         self.item_start = 0.0
         self.item_ms = 0.0
+        self.recording = bytearray()
 
     def session_config(self):
         barge_in = env("BARGE_IN", "0") == "1"
@@ -279,6 +280,7 @@ class Conversation:
                 for t in tasks:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+            self.save_recording()
             for t in done:
                 t.result()  # remonte l'erreur éventuelle
 
@@ -288,8 +290,21 @@ class Conversation:
             chunk = await self.app.convo_q.get()
             if not barge_in and self.player.is_playing():
                 continue  # micro coupé pendant que Jarvis parle (évite qu'il s'entende)
+            if len(self.recording) < MIC_RATE * 2 * 90:  # 90 s max de « ce que Jarvis entend »
+                self.recording += chunk
             audio = base64.b64encode(to_api_rate(chunk)).decode()
             await ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": audio}))
+
+    def save_recording(self):
+        """Écrit www/entree.wav : le son réellement envoyé à OpenAI, pour l'écouter soi-même."""
+        if not self.recording:
+            return
+        www = Path(__file__).with_name("www")
+        www.mkdir(exist_ok=True)
+        pcm = bytes(self.recording)
+        header = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + len(pcm), b"WAVE", b"fmt ", 16, 1, 1,
+                             MIC_RATE, MIC_RATE * 2, 2, 16, b"data", len(pcm))
+        (www / "entree.wav").write_bytes(header + pcm)
 
     async def receive(self, ws):
         async for raw in ws:
@@ -335,8 +350,8 @@ class Conversation:
                                   "content_index": 0, "audio_end_ms": int(max(0, played))}))
 
     async def handle_response_done(self, ws, response):
-        if response.get("status") == "failed":
-            log.error("Réponse échouée : %s", response.get("status_details"))
+        if response.get("status") != "completed":
+            log.warning("Réponse %s : %s", response.get("status"), response.get("status_details"))
         usage = response.get("usage")
         if usage:
             log.debug("Jetons : %s", usage)
