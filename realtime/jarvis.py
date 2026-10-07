@@ -487,10 +487,11 @@ class App:
         word = env("WAKE_WORD", "hey_jarvis")
         model = word if word.endswith(("_v0.1", ".onnx")) else word + "_v0.1"
         det = await asyncio.to_thread(wake.WakeDetector, model.removesuffix(".onnx"),
-                                      float(env("WAKE_THRESHOLD", "0.5")))
+                                      float(env("WAKE_THRESHOLD", "0.5")), int(env("WAKE_PATIENCE", "2")))
         while not self.wake_q.empty():
             self.wake_q.get_nowait()
-        log.info("Prêt : dites « Hey Jarvis » (détection locale, modèle %s, seuil %s)", det.name, det.threshold)
+        log.info("Prêt : dites « Hey Jarvis » (détection locale, modèle %s, seuil %s, persistance %d)",
+                 det.name, det.threshold, det.patience)
         n, best, last = 0, 0.0, time.monotonic()
         while True:
             chunk = await self.wake_q.get()

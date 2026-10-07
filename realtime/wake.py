@@ -126,7 +126,7 @@ if __name__ == "__main__":
                              "-c", "1", "-f", "S16_LE", "-t", "raw"], stdout=subprocess.PIPE)
     fd = proc.stdout.fileno()
     print("Micro lancé, chargement des modèles...", flush=True)
-    det = WakeDetector(threshold=float(env("WAKE_THRESHOLD", "0.5")))
+    det = WakeDetector(threshold=float(env("WAKE_THRESHOLD", "0.5")), patience=int(env("WAKE_PATIENCE", "2")))
     print("Dites « Hey Jarvis ». Score en direct (seuil %.2f). Ctrl+C pour quitter." % det.threshold, flush=True)
     best, t_last, total, peak = 0.0, time.monotonic(), 0, 0
     try:
