@@ -120,10 +120,15 @@ if __name__ == "__main__":
         bench()
         sys.exit()
     sys.path.insert(0, str(Path(__file__).parent))
-    from jarvis import load_env, env
+    from jarvis import load_env, env, mic_channels, select_channel
     load_env()
+    if len(sys.argv) > 1 and sys.argv[1] in ("0", "1", "mono"):
+        os.environ["MIC_CHANNEL"] = sys.argv[1]  # python3 wake.py 1  -> teste le canal 1
+    channels, channel = mic_channels()
+    gain = float(env("MIC_GAIN", "2.5"))
     proc = subprocess.Popen(["arecord", "-q", "-D", env("MIC_DEVICE", "plughw:2,0"), "-r", "16000",
-                             "-c", "1", "-f", "S16_LE", "-t", "raw"], stdout=subprocess.PIPE)
+                             "-c", str(channels), "-f", "S16_LE", "-t", "raw"], stdout=subprocess.PIPE)
+    print(f"Canal micro : {'mono' if channels == 1 else channel}, gain {gain}", flush=True)
     fd = proc.stdout.fileno()
     print("Micro lancé, chargement des modèles...", flush=True)
     det = WakeDetector(threshold=float(env("WAKE_THRESHOLD", "0.5")), patience=int(env("WAKE_PATIENCE", "2")))
@@ -131,10 +136,19 @@ if __name__ == "__main__":
     best, t_last, total, peak = 0.0, time.monotonic(), 0, 0
     try:
         while True:
-            pcm = os.read(fd, CHUNK * 2)
+            pcm = b""
+            while len(pcm) < CHUNK * 2 * channels:
+                part = os.read(fd, CHUNK * 2 * channels - len(pcm))
+                if not part:
+                    break
+                pcm += part
             if not pcm:
                 print("arecord s'est arrêté", flush=True)
                 break
+            pcm = select_channel(pcm, channels, channel)
+            if gain != 1.0:
+                pcm = np.clip(np.frombuffer(pcm, dtype=np.int16).astype(np.float32) * gain,
+                              -32768, 32767).astype(np.int16).tobytes()
             total += len(pcm)
             peak = max(peak, int(np.abs(np.frombuffer(pcm, dtype=np.int16)).max()))
             t = time.monotonic()

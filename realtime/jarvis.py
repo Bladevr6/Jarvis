@@ -73,6 +73,18 @@ def env(key, default=None):
     return os.environ.get(key, default)
 
 
+def mic_channels():
+    """MIC_CHANNEL=mono (défaut) ou 0/1 : le ReSpeaker XVF3800 sort 2 canaux traités différemment."""
+    v = env("MIC_CHANNEL", "mono")
+    return (1, 0) if v == "mono" else (2, int(v))
+
+
+def select_channel(raw: bytes, channels: int, channel: int) -> bytes:
+    if channels == 1:
+        return raw
+    return np.frombuffer(raw, dtype=np.int16).reshape(-1, channels)[:, channel].tobytes()
+
+
 def to_api_rate(pcm16k: bytes) -> bytes:
     """Rééchantillonne 16 kHz -> 24 kHz (interpolation linéaire, très léger)."""
     x = np.frombuffer(pcm16k, dtype=np.int16).astype(np.float32)
@@ -447,14 +459,17 @@ class App:
 
     async def mic_loop(self):
         device = env("MIC_DEVICE", "plughw:2,0")
+        channels, channel = mic_channels()
         while True:
             proc = await asyncio.create_subprocess_exec(
-                "arecord", "-q", "-D", device, "-r", str(MIC_RATE), "-c", "1", "-f", "S16_LE", "-t", "raw",
-                stdout=asyncio.subprocess.PIPE)
-            log.info("Micro ouvert (%s)", device)
+                "arecord", "-q", "-D", device, "-r", str(MIC_RATE), "-c", str(channels), "-f", "S16_LE",
+                "-t", "raw", stdout=asyncio.subprocess.PIPE)
+            log.info("Micro ouvert (%s, %d canal/canaux, canal utilisé %s)", device, channels,
+                     channel if channels > 1 else "mono")
             try:
                 while True:
-                    self.on_mic(await proc.stdout.readexactly(CHUNK_BYTES))
+                    raw = await proc.stdout.readexactly(CHUNK_BYTES * channels)
+                    self.on_mic(select_channel(raw, channels, channel))
             except asyncio.IncompleteReadError:
                 log.error("Le micro s'est arrêté (occupé par un autre programme ?). Nouvel essai dans 3 s")
             finally:
