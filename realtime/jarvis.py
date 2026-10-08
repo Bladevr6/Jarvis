@@ -460,24 +460,45 @@ class App:
         self.state = "convo"  # le micro bascule tout de suite vers la conversation
         self.wake_event.set()
 
+    async def reset_mic(self):
+        """Le ReSpeaker USB se fige parfois (Input/output error) : on le réinitialise."""
+        cmd = env("MIC_RESET_CMD", "sudo -n usbreset 2886:001a")
+        if not cmd:
+            return
+        log.warning("Réinitialisation du micro USB (%s)", cmd)
+        proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.DEVNULL,
+                                                     stderr=asyncio.subprocess.PIPE)
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            log.error("Réinitialisation impossible : %s", err.decode().strip())
+        await asyncio.sleep(3)
+
     async def mic_loop(self):
         device = env("MIC_DEVICE", "plughw:2,0")
         channels, channel = mic_channels()
+        failures = 0
         while True:
             proc = await asyncio.create_subprocess_exec(
                 "arecord", "-q", "-D", device, "-r", str(MIC_RATE), "-c", str(channels), "-f", "S16_LE",
                 "-t", "raw", stdout=asyncio.subprocess.PIPE)
             log.info("Micro ouvert (%s, %d canal/canaux, canal utilisé %s)", device, channels,
                      channel if channels > 1 else "mono")
+            started = time.monotonic()
             try:
                 while True:
                     raw = await proc.stdout.readexactly(CHUNK_BYTES * channels)
+                    failures = 0
                     self.on_mic(select_channel(raw, channels, channel))
             except asyncio.IncompleteReadError:
-                log.error("Le micro s'est arrêté (occupé par un autre programme ?). Nouvel essai dans 3 s")
+                failures += 1
+                log.error("Le micro s'est arrêté (essai %d). Nouvel essai dans 3 s", failures)
             finally:
                 if proc.returncode is None:
-                    proc.kill()
+                    proc.terminate()
+                    await proc.wait()
+            if failures >= 3 and time.monotonic() - started < 5:
+                await self.reset_mic()
+                failures = 0
             await asyncio.sleep(3)
 
     async def restart_wake_server(self):
