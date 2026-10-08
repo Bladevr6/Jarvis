@@ -19,8 +19,18 @@ def env(key, default=None):
 
 
 # ---------------------------------------------------------------- météo
+def _weather_entity():
+    forced = env("WEATHER_ENTITY", "")
+    if forced:
+        return forced
+    ids = [s["entity_id"] for s in _ha("GET", "/api/states").json() if s["entity_id"].startswith("weather.")]
+    if not ids:
+        raise RuntimeError("aucune entité weather.* dans Home Assistant")
+    return ids[0]
+
+
 def meteo(quand="aujourd_hui"):
-    entity = env("WEATHER_ENTITY", "weather.forecast_home")
+    entity = _weather_entity()
     actuel = _ha("GET", f"/api/states/{entity}").json()
     a = actuel.get("attributes", {})
     out = {"maintenant": {"etat": actuel.get("state"), "temperature": a.get("temperature"),
@@ -63,9 +73,9 @@ def agenda(jours=1):
             else:
                 d = datetime.fromisoformat(start)
                 quand = f"{JOURS[d.weekday()]} {d:%d/%m} (toute la journée)"
-            evenements.append({"quand": quand, "titre": e.get("summary"), "lieu": e.get("location"),
-                               "agenda": cal.split(".", 1)[1]})
-    evenements.sort(key=lambda e: e["quand"])
+            evenements.append({"_t": start, "quand": quand, "titre": e.get("summary"),
+                               "lieu": e.get("location"), "agenda": cal.split(".", 1)[1]})
+    evenements.sort(key=lambda e: e.pop("_t"))
     return {"periode": f"{jours} jour(s) à partir d'aujourd'hui", "evenements": evenements or "aucun événement"}
 
 
@@ -107,7 +117,8 @@ def annoncer(message, cible="sonos"):
         return {"ok": True, "cible": "sonos"}
     services = [s for s in _notify_services() if s.startswith("alexa_media")]
     if cible == "partout":
-        choisis = [s for s in services if s not in ("alexa_media", "alexa_media_last_called")]
+        voulus = [e.strip() for e in env("ALEXA_ECHOS", "bureau,echo_salon,echo_spot,mia").split(",")]
+        choisis = [s for s in services if any(v and v in s for v in voulus)]
     else:
         key = cible.replace(" ", "_").replace("-", "_")
         choisis = [s for s in services if key in s]
