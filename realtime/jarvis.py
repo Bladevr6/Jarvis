@@ -101,6 +101,20 @@ def make_beep() -> bytes:
     return (wave * 8000).astype(np.int16).tobytes()
 
 
+async def fetch_inventory():
+    try:
+        return await asyncio.to_thread(ha_tools.inventaire)
+    except Exception as e:
+        log.warning("Inventaire HA indisponible : %s", e)
+        return "(indisponible, utilise lister_appareils)"
+
+
+async def open_session():
+    url = "wss://api.openai.com/v1/realtime?model=" + env("REALTIME_MODEL", "gpt-realtime")
+    headers = {"Authorization": "Bearer " + env("OPENAI_API_KEY", "")}
+    return await connect(url, additional_headers=headers, max_size=None, ping_interval=20)
+
+
 class Player:
     """Joue du PCM 24 kHz via aplay. stop() coupe net (interruption)."""
 
@@ -285,23 +299,17 @@ class Conversation:
             },
         }
 
-    async def run(self):
-        url = "wss://api.openai.com/v1/realtime?model=" + env("REALTIME_MODEL", "gpt-realtime-mini")
-        headers = {"Authorization": "Bearer " + env("OPENAI_API_KEY", "")}
+    async def run(self, ws=None):
         t0 = time.monotonic()
-
-        async def fetch_inventory():
-            try:
-                return await asyncio.to_thread(ha_tools.inventaire)
-            except Exception as e:
-                log.warning("Inventaire HA indisponible : %s", e)
-                return "(indisponible, utilise lister_appareils)"
-
-        ws, inventaire = await asyncio.gather(
-            connect(url, additional_headers=headers, max_size=None, ping_interval=20), fetch_inventory())
-        async with ws:
+        if ws is None:
+            ws, inventaire = await asyncio.gather(open_session(), fetch_inventory())
             await ws.send(json.dumps(self.session_config(inventaire)))
             log.info("Connecté à OpenAI en %.0f ms", (time.monotonic() - t0) * 1000)
+        else:
+            # Connexion pré-ouverte : on rafraîchit seulement les consignes (inventaire, heure)
+            log.info("Session OpenAI pré-ouverte utilisée")
+            asyncio.create_task(self.refresh_instructions(ws))
+        async with ws:
             tasks = [asyncio.create_task(c) for c in (self.send_audio(ws), self.receive(ws), self.watchdog())]
             try:
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -312,6 +320,12 @@ class Conversation:
             self.save_recording()
             for t in done:
                 t.result()  # remonte l'erreur éventuelle
+
+    async def refresh_instructions(self, ws):
+        inventaire = await fetch_inventory()
+        cfg = self.session_config(inventaire)["session"]
+        await ws.send(json.dumps({"type": "session.update",
+                                  "session": {"type": "realtime", "instructions": cfg["instructions"]}}))
 
     async def send_audio(self, ws):
         barge_in = env("BARGE_IN", "0") == "1"
@@ -486,17 +500,21 @@ class App:
             started = time.monotonic()
             try:
                 while True:
-                    raw = await proc.stdout.readexactly(CHUNK_BYTES * channels)
+                    raw = await asyncio.wait_for(proc.stdout.readexactly(CHUNK_BYTES * channels), timeout=5)
                     failures = 0
                     self.on_mic(select_channel(raw, channels, channel))
             except asyncio.IncompleteReadError:
                 failures += 1
                 log.error("Le micro s'est arrêté (essai %d). Nouvel essai dans 3 s", failures)
+            except asyncio.TimeoutError:
+                failures = 3  # micro muet (figé sans erreur) : on force la réinitialisation
+                started = time.monotonic()
+                log.error("Le micro ne renvoie plus de son depuis 5 s")
             finally:
                 if proc.returncode is None:
                     proc.terminate()
                     await proc.wait()
-            if failures >= 3 and time.monotonic() - started < 5:
+            if failures >= 3 and time.monotonic() - started < 6:
                 await self.reset_mic()
                 failures = 0
             await asyncio.sleep(3)
@@ -590,8 +608,29 @@ class App:
             if Detection.is_type(event.type):
                 self.on_wake(Detection.from_event(event).name)
 
+    async def warm_session(self):
+        """Garde une session OpenAI prête (connectée + configurée) pour répondre sans délai.
+        Renouvelée toutes les WARM_MINUTES ; coût nul tant qu'aucun son n'est envoyé."""
+        if env("WARM_SESSION", "1") != "1":
+            return None
+        try:
+            ws, inventaire = await asyncio.gather(open_session(), fetch_inventory())
+            await ws.send(json.dumps(Conversation(self).session_config(inventaire)))
+            # On attend session.created/updated pour être sûr que la config est appliquée
+            for _ in range(2):
+                ev = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+                if ev.get("type") == "error":
+                    raise RuntimeError(ev.get("error", {}).get("message"))
+            log.debug("Session OpenAI pré-ouverte prête")
+            return ws
+        except Exception as e:
+            log.warning("Session pré-ouverte impossible (%s), on se connectera à la demande", e)
+            return None
+
     async def run(self):
         background = [asyncio.create_task(self.mic_loop()), asyncio.create_task(self.player.run())]
+        warm, warm_since = None, 0.0
+        warm_ttl = float(env("WARM_MINUTES", "25")) * 60
         if not self.direct:
             background.append(asyncio.create_task(self.wake_loop()))
         beep = make_beep() if env("BEEP", "1") == "1" else None
@@ -600,12 +639,22 @@ class App:
                 self.state = "convo"
                 log.info("Mode direct : parlez !")
             else:
-                await self.wake_event.wait()
+                if warm is None or time.monotonic() - warm_since > warm_ttl:
+                    if warm is not None:
+                        await warm.close()
+                    warm, warm_since = await self.warm_session(), time.monotonic()
+                try:
+                    await asyncio.wait_for(self.wake_event.wait(), timeout=60)
+                except asyncio.TimeoutError:
+                    continue  # on revient vérifier l'âge de la session chaude
                 self.wake_event.clear()
             if beep and not isinstance(self.player, SonosPlayer):
                 self.player.play(beep)
             try:
-                await Conversation(self).run()
+                ws, warm = warm, None
+                if ws is not None and ws.state.name != "OPEN":
+                    ws = None
+                await Conversation(self).run(ws)
             except Exception as e:
                 log.error("Conversation interrompue : %s", e)
             finally:
