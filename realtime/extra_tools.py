@@ -79,10 +79,23 @@ def agenda(jours=1):
     return {"periode": f"{jours} jour(s) à partir d'aujourd'hui", "evenements": evenements or "aucun événement"}
 
 
+EXCLUS_ECRITURE = ("semaine", "holiday", "ferie", "férié", "birthday", "anniversaire", "contacts")
+
+
+def _calendar_for_write():
+    forced = env("CALENDAR_WRITE_ENTITY", "")
+    if forced:
+        return forced
+    for cal in _calendars():
+        if not any(x in cal.lower() for x in EXCLUS_ECRITURE):
+            return cal
+    return None
+
+
 def ajouter_evenement(titre, debut, duree_minutes=60, agenda_entity=""):
-    cal = agenda_entity or (_calendars() or [None])[0]
+    cal = agenda_entity or _calendar_for_write()
     if not cal:
-        return {"erreur": "aucun agenda trouvé"}
+        return {"erreur": "aucun agenda modifiable trouvé"}
     d = datetime.fromisoformat(debut)
     f = d + timedelta(minutes=int(duree_minutes))
     _ha("POST", "/api/services/calendar/create_event", {
@@ -135,6 +148,7 @@ _timers = {}
 
 def _fire(nom, message):
     _timers.pop(nom, None)
+    log.info("Minuteur « %s » terminé : annonce « %s »", nom, message)
     try:
         annoncer(message, "sonos")
     except Exception as e:  # on ne veut pas perdre le fil
@@ -204,7 +218,8 @@ TOOLS = [
      "description": "Événements de l'agenda familial (Google Calendar) pour les N prochains jours à partir d'aujourd'hui.",
      "parameters": {"type": "object", "properties": {"jours": {"type": "integer", "minimum": 1, "maximum": 30}}}},
     {"type": "function", "name": "ajouter_evenement",
-     "description": "Ajoute un rendez-vous à l'agenda. debut au format ISO local AAAA-MM-JJTHH:MM.",
+     "description": "Ajoute un rendez-vous à l'agenda familial. debut au format ISO local AAAA-MM-JJTHH:MM. "
+                    "Ne demande pas la durée : 60 minutes par défaut sauf si l'utilisateur la précise.",
      "parameters": {"type": "object", "properties": {
          "titre": {"type": "string"}, "debut": {"type": "string"},
          "duree_minutes": {"type": "integer"}}, "required": ["titre", "debut"]}},
