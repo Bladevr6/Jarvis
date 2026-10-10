@@ -223,7 +223,7 @@ class SonosPlayer:
         # Micro coupé au plus 5 s en attendant que le Sonos vienne chercher le fichier ;
         # on_fetch recale ensuite précisément sur l'instant réel de lecture.
         self.awaiting = {name: duration}
-        self.play_until = time.monotonic() + 5
+        self.play_until = time.monotonic() + 3
         url = f"http://{self.ip}:{self.PORT}/{name}?t={self.counter}"
         try:
             ha_tools._ha("POST", "/api/services/media_player/play_media", {
@@ -235,7 +235,7 @@ class SonosPlayer:
     def on_fetch(self, name):
         duration = self.awaiting.pop(name, None)
         if duration is not None:
-            self.play_until = time.monotonic() + duration + 0.4
+            self.play_until = time.monotonic() + duration + 0.2
             log.debug("Sonos lit %s (%.1f s)", name, duration)
 
     async def run(self):
@@ -364,8 +364,9 @@ class Conversation:
             elif t == "input_audio_buffer.speech_started":
                 self.heard_speech = True
                 self.last_activity = time.monotonic()
-                if self.player.is_playing(margin=0) and self.item_id:
-                    await self.interrupt(ws)
+                if (self.player.is_playing(margin=0) and self.item_id
+                        and not isinstance(self.player, SonosPlayer)):
+                    await self.interrupt(ws)  # le Sonos, lui, ne peut pas être interrompu
             elif t == "input_audio_buffer.speech_stopped":
                 self.last_activity = time.monotonic()
             elif t == "conversation.item.input_audio_transcription.completed":
@@ -417,7 +418,7 @@ class Conversation:
             await ws.send(json.dumps({"type": "conversation.item.create", "item": {
                 "type": "function_call_output", "call_id": call["call_id"],
                 "output": json.dumps(result, ensure_ascii=False)}}))
-        if need_followup and not self.end_requested:
+        if need_followup and not self.end_requested and not self.responding:
             await ws.send(json.dumps({"type": "response.create"}))
 
     async def watchdog(self):
