@@ -122,23 +122,23 @@ views:
                     - font-size: 11px
                     - color: var(--secondary-text-color)
               - type: custom:button-card
-                entity: person.maman
-                name: Maman
-                show_entity_picture: true
-                show_state: true
-                state_display: >
-                  [[[ return entity.state === 'home' ? 'À la maison' : 'Absente'; ]]]
+                name: Ivy
+                icon: mdi:baby-face-outline
+                entity: binary_sensor.ivy_mouvement
+                show_state: false
+                show_label: true
+                label: >
+                  [[[ return entity.state === 'on' ? 'Du mouvement' : 'Calme'; ]]]
                 styles:
                   card:
                     - padding: 10px
-                  entity_picture:
-                    - width: 64px
-                    - border-radius: 50%
-                    - border: >
-                        [[[ return '3px solid ' + (entity.state === 'home' ? '#22c55e' : '#64748b'); ]]]
+                  icon:
+                    - width: 52px
+                    - color: >
+                        [[[ return entity.state === 'on' ? '#f59e0b' : '#38bdf8'; ]]]
                   name:
                     - font-weight: 700
-                  state:
+                  label:
                     - font-size: 11px
                     - color: var(--secondary-text-color)
               - type: custom:button-card
