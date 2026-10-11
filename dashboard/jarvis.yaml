@@ -103,7 +103,7 @@ views:
             cards:
               - type: custom:button-card
                 entity: person.jose
-                name: José
+                name: Papa
                 show_entity_picture: true
                 show_state: true
                 state_display: >
@@ -116,6 +116,27 @@ views:
                     - border-radius: 50%
                     - border: >
                         [[[ return '3px solid ' + (entity.state === 'home' ? '#22c55e' : '#64748b'); ]]]
+                  name:
+                    - font-weight: 700
+                  state:
+                    - font-size: 11px
+                    - color: var(--secondary-text-color)
+              - type: custom:button-card
+                entity: person.maman
+                name: Maman
+                show_entity_picture: true
+                show_state: true
+                state_display: >
+                  [[[ if (!entity) return '—';
+                      return entity.state === 'home' ? 'À la maison' : entity.state === 'not_home' ? 'Absente' : '—'; ]]]
+                styles:
+                  card:
+                    - padding: 10px
+                  entity_picture:
+                    - width: 64px
+                    - border-radius: 50%
+                    - border: >
+                        [[[ return '3px solid ' + (entity && entity.state === 'home' ? '#22c55e' : '#64748b'); ]]]
                   name:
                     - font-weight: 700
                   state:
