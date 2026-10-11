@@ -19,7 +19,9 @@ ALLOWED_SERVICES = {
     "climate": {"set_temperature", "turn_on", "turn_off"},
     "fan": {"turn_on", "turn_off"},
 }
-LIST_DOMAINS = set(ALLOWED_SERVICES) | {"weather", "sensor", "binary_sensor", "calendar", "input_text"}
+LIST_DOMAINS = set(ALLOWED_SERVICES) | {"weather", "sensor", "binary_sensor", "calendar", "input_text",
+                                         "camera", "person", "device_tracker", "todo", "input_boolean",
+                                         "automation", "zone", "sun"}
 MAX_LINES = 60
 
 

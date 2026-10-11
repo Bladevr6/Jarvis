@@ -1,0 +1,511 @@
+# Tableau de bord « Jarvis » — Home Assistant (vue « sections »)
+# Cartes HACS requises : Bubble Card, Mushroom, button-card, card-mod, ApexCharts Card (optionnel)
+# Installation : voir dashboard/README.md
+title: Jarvis
+views:
+  - title: Maison
+    path: maison
+    type: sections
+    max_columns: 3
+    dense_section_placement: true
+    badges: []
+    sections:
+      # ================================================================ COLONNE 1
+      - type: grid
+        cards:
+          - type: custom:bubble-card
+            card_type: separator
+            name: Maison
+            icon: mdi:home-variant-outline
+
+          # Horloge + météo
+          - type: custom:button-card
+            entity: weather.forecast_maison
+            show_name: false
+            show_icon: true
+            show_state: false
+            styles:
+              card:
+                - padding: 18px
+              grid:
+                - grid-template-areas: '"i time" "i date" "i cond"'
+                - grid-template-columns: 90px 1fr
+              icon:
+                - width: 72px
+                - color: var(--accent-color)
+              custom_fields:
+                time:
+                  - font-size: 46px
+                  - font-weight: 800
+                  - letter-spacing: 1px
+                  - justify-self: start
+                date:
+                  - font-size: 14px
+                  - color: var(--secondary-text-color)
+                  - justify-self: start
+                cond:
+                  - font-size: 15px
+                  - justify-self: start
+                  - padding-top: 4px
+            custom_fields:
+              time: >
+                [[[ return new Date().toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'}); ]]]
+              date: >
+                [[[ return new Date().toLocaleDateString('fr-FR', {weekday: 'long', day: 'numeric', month: 'long'}); ]]]
+              cond: >
+                [[[ const t = {cloudy:'Nuageux', rainy:'Pluie', sunny:'Ensoleillé', partlycloudy:'Éclaircies',
+                   fog:'Brouillard', snowy:'Neige', pouring:'Averses', lightning:'Orage', windy:'Vent',
+                   'clear-night':'Nuit claire', 'lightning-rainy':'Orage pluvieux'};
+                   return (t[entity.state] || entity.state) + ' · ' + entity.attributes.temperature + '°C'; ]]]
+            tap_action:
+              action: more-info
+
+          - type: weather-forecast
+            entity: weather.forecast_maison
+            forecast_type: daily
+            show_current: false
+            show_forecast: true
+            card_mod:
+              style: |
+                ha-card { padding-top: 6px; }
+
+          # Températures des caméras Blink
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-entity-card
+                entity: sensor.blink_salon_temperature
+                name: Salon
+                icon: mdi:sofa-outline
+                icon_color: amber
+                layout: vertical
+              - type: custom:mushroom-entity-card
+                entity: sensor.blink_jardin_temperature
+                name: Jardin
+                icon: mdi:tree-outline
+                icon_color: green
+                layout: vertical
+              - type: custom:mushroom-entity-card
+                entity: sensor.sun_next_setting
+                name: Coucher
+                icon: mdi:weather-sunset-down
+                icon_color: orange
+                layout: vertical
+                card_mod:
+                  style: |
+                    ha-state-icon { --icon-symbol-size: 22px; }
+
+          # Famille (à adapter : person.* et photos dans /config/www/avatars/)
+          - type: custom:bubble-card
+            card_type: separator
+            name: Famille
+            icon: mdi:account-group-outline
+          - type: horizontal-stack
+            cards:
+              - type: custom:button-card
+                entity: person.jose
+                name: José
+                show_entity_picture: true
+                show_state: true
+                state_display: >
+                  [[[ return entity.state === 'home' ? 'À la maison' : 'Absent'; ]]]
+                styles:
+                  card:
+                    - padding: 10px
+                  entity_picture:
+                    - width: 64px
+                    - border-radius: 50%
+                    - border: >
+                        [[[ return '3px solid ' + (entity.state === 'home' ? '#22c55e' : '#64748b'); ]]]
+                  name:
+                    - font-weight: 700
+                  state:
+                    - font-size: 11px
+                    - color: var(--secondary-text-color)
+              - type: custom:button-card
+                entity: person.maman
+                name: Maman
+                show_entity_picture: true
+                show_state: true
+                state_display: >
+                  [[[ return entity.state === 'home' ? 'À la maison' : 'Absente'; ]]]
+                styles:
+                  card:
+                    - padding: 10px
+                  entity_picture:
+                    - width: 64px
+                    - border-radius: 50%
+                    - border: >
+                        [[[ return '3px solid ' + (entity.state === 'home' ? '#22c55e' : '#64748b'); ]]]
+                  name:
+                    - font-weight: 700
+                  state:
+                    - font-size: 11px
+                    - color: var(--secondary-text-color)
+              - type: custom:button-card
+                name: Mia
+                icon: mdi:face-woman-shimmer-outline
+                show_state: false
+                entity: sensor.mia_prochaine_alarme
+                label: >
+                  [[[ if (!entity || ['unknown','unavailable'].includes(entity.state)) return 'Pas de réveil';
+                      return 'Réveil ' + new Date(entity.state).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}); ]]]
+                show_label: true
+                styles:
+                  card:
+                    - padding: 10px
+                  icon:
+                    - width: 52px
+                    - color: '#f472b6'
+                  name:
+                    - font-weight: 700
+                  label:
+                    - font-size: 11px
+                    - color: var(--secondary-text-color)
+
+          # Batteries et téléphones
+          - type: custom:mushroom-entity-card
+            entity: sensor.xiaomi_battery_level
+            name: Téléphone Xiaomi
+            icon: mdi:cellphone
+            icon_color: >
+              {% set b = states('sensor.xiaomi_battery_level') | int(0) %}
+              {{ 'red' if b < 20 else 'amber' if b < 50 else 'green' }}
+            secondary_info: state
+
+          # Agenda + mail
+          - type: custom:bubble-card
+            card_type: separator
+            name: Aujourd'hui
+            icon: mdi:calendar-today-outline
+          - type: calendar
+            entities:
+              - calendar.osorio_jm87_gmail_com
+              - calendar.anniversaires
+            initial_view: list
+            card_mod:
+              style: |
+                ha-card { height: 320px; }
+          - type: markdown
+            title: Dernier e-mail
+            content: >
+              {{ states('input_text.dernier_mail') | default('Aucun', true) }}
+            card_mod:
+              style: |
+                ha-card { font-size: 13px; }
+
+      # ================================================================ COLONNE 2
+      - type: grid
+        cards:
+          - type: custom:bubble-card
+            card_type: separator
+            name: Jarvis
+            icon: mdi:robot-outline
+
+          # Bouton Alexa annonce (ouvre une popup avec champ texte + cibles)
+          - type: custom:bubble-card
+            card_type: button
+            button_type: name
+            name: Alexa annonce
+            icon: mdi:bullhorn-outline
+            tap_action:
+              action: navigate
+              navigation_path: '#annonce'
+            styles: |
+              .bubble-button-card-container {
+                background: linear-gradient(90deg, rgba(79,124,255,0.35), rgba(56,189,248,0.25)) !important;
+                border: 1px solid rgba(120,150,255,0.35) !important;
+              }
+              .bubble-name { font-weight: 800; letter-spacing: 1px; text-transform: uppercase; }
+
+          - type: vertical-stack
+            cards:
+              - type: custom:bubble-card
+                card_type: pop-up
+                hash: '#annonce'
+                name: Annonce vocale
+                icon: mdi:bullhorn-outline
+              - type: entities
+                entities:
+                  - entity: input_text.annonce_message
+                    name: Message
+                  - entity: input_select.annonce_cible
+                    name: Où
+              - type: custom:bubble-card
+                card_type: button
+                button_type: name
+                name: Envoyer
+                icon: mdi:send-outline
+                tap_action:
+                  action: perform-action
+                  perform_action: script.jarvis_annonce
+
+          # Lumières par pièce
+          - type: custom:bubble-card
+            card_type: separator
+            name: Lumières
+            icon: mdi:lightbulb-group-outline
+          - type: custom:mushroom-light-card
+            entity: light.salon
+            name: Salon
+            icon: mdi:sofa-outline
+            use_light_color: true
+            show_brightness_control: true
+            collapsible_controls: true
+          - type: custom:mushroom-light-card
+            entity: light.salle_a_manger
+            name: Salle à manger
+            icon: mdi:silverware-fork-knife
+            use_light_color: true
+            show_brightness_control: true
+            collapsible_controls: true
+          - type: custom:mushroom-template-card
+            primary: Cuisine
+            secondary: >
+              {% set n = expand('light.cuisine_1','light.cuisine_2','light.cuisine_3','light.cuisine_4') | selectattr('state','eq','on') | list | count %}
+              {{ n }} / 4 allumées
+            icon: mdi:countertop-outline
+            icon_color: >
+              {% set n = expand('light.cuisine_1','light.cuisine_2','light.cuisine_3','light.cuisine_4') | selectattr('state','eq','on') | list | count %}
+              {{ 'amber' if n > 0 else 'disabled' }}
+            tap_action:
+              action: perform-action
+              perform_action: light.toggle
+              target:
+                entity_id:
+                  - light.cuisine_1
+                  - light.cuisine_2
+                  - light.cuisine_3
+                  - light.cuisine_4
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-light-card
+                entity: light.cuisine_1
+                name: C1
+                layout: vertical
+                show_brightness_control: false
+              - type: custom:mushroom-light-card
+                entity: light.cuisine_2
+                name: C2
+                layout: vertical
+                show_brightness_control: false
+              - type: custom:mushroom-light-card
+                entity: light.cuisine_3
+                name: C3
+                layout: vertical
+                show_brightness_control: false
+              - type: custom:mushroom-light-card
+                entity: light.cuisine_4
+                name: C4
+                layout: vertical
+                show_brightness_control: false
+          - type: custom:mushroom-light-card
+            entity: light.escalier
+            name: Escalier
+            icon: mdi:stairs
+            collapsible_controls: true
+
+          # Stores
+          - type: custom:bubble-card
+            card_type: separator
+            name: Stores
+            icon: mdi:blinds-horizontal
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-cover-card
+                entity: cover.salon_salon_gauche
+                name: Salon G
+                layout: vertical
+                show_buttons_control: true
+              - type: custom:mushroom-cover-card
+                entity: cover.salon_salon_droite
+                name: Salon D
+                layout: vertical
+                show_buttons_control: true
+              - type: custom:mushroom-cover-card
+                entity: cover.salle_a_manger_salle_a_manger
+                name: S. à manger
+                layout: vertical
+                show_buttons_control: true
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-cover-card
+                entity: cover.cuisine_cuisine
+                name: Cuisine
+                layout: vertical
+                show_buttons_control: true
+              - type: custom:mushroom-cover-card
+                entity: cover.jardin_store_de_terrasse
+                name: Terrasse
+                layout: vertical
+                show_buttons_control: true
+              - type: custom:mushroom-cover-card
+                entity: cover.wc_wc
+                name: WC
+                layout: vertical
+                show_buttons_control: true
+          - type: horizontal-stack
+            cards:
+              - type: custom:mushroom-cover-card
+                entity: cover.chambre_chambre_master
+                name: Parents
+                layout: vertical
+                show_buttons_control: true
+              - type: custom:mushroom-cover-card
+                entity: cover.chambre_chambre_mia
+                name: Mia
+                layout: vertical
+                show_buttons_control: true
+              - type: custom:mushroom-cover-card
+                entity: cover.chambre_ivy
+                name: Ivy
+                layout: vertical
+                show_buttons_control: true
+              - type: custom:mushroom-cover-card
+                entity: cover.chambre_salle_de_jeux
+                name: Bureau
+                layout: vertical
+                show_buttons_control: true
+
+          # Garage
+          - type: custom:mushroom-cover-card
+            entity: cover.garage_porte_garage
+            name: Porte de garage
+            icon: mdi:garage-variant
+            show_buttons_control: true
+            fill_container: true
+            card_mod:
+              style: |
+                ha-card { border-color: rgba(239,68,68,0.35); }
+
+      # ================================================================ COLONNE 3
+      - type: grid
+        cards:
+          - type: custom:bubble-card
+            card_type: separator
+            name: Caméras
+            icon: mdi:cctv
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: picture-entity
+                entity: camera.porte_entree
+                name: Porte d'entrée
+                camera_view: auto
+                show_state: false
+              - type: picture-entity
+                entity: camera.jardin
+                name: Jardin
+                camera_view: auto
+                show_state: false
+              - type: picture-entity
+                entity: camera.salon
+                name: Salon
+                camera_view: auto
+                show_state: false
+              - type: picture-entity
+                entity: camera.bureau
+                name: Bureau
+                camera_view: auto
+                show_state: false
+          - type: custom:mushroom-chips-card
+            alignment: center
+            chips:
+              - type: entity
+                entity: binary_sensor.porte_entree_mouvement
+                name: Entrée
+                icon: mdi:motion-sensor
+              - type: entity
+                entity: binary_sensor.jardin_mouvement
+                name: Jardin
+                icon: mdi:motion-sensor
+              - type: entity
+                entity: binary_sensor.salon_mouvement
+                name: Salon
+                icon: mdi:motion-sensor
+              - type: template
+                icon: mdi:battery-alert-variant-outline
+                icon_color: >
+                  {% set low = expand('binary_sensor.mia_batterie','binary_sensor.ivy_batterie','binary_sensor.bureau_batterie',
+                     'binary_sensor.salon_batterie','binary_sensor.jardin_batterie','binary_sensor.porte_entree_batterie')
+                     | selectattr('state','eq','on') | list | count %}
+                  {{ 'red' if low > 0 else 'green' }}
+                content: >
+                  {% set low = expand('binary_sensor.mia_batterie','binary_sensor.ivy_batterie','binary_sensor.bureau_batterie',
+                     'binary_sensor.salon_batterie','binary_sensor.jardin_batterie','binary_sensor.porte_entree_batterie')
+                     | selectattr('state','eq','on') | list | count %}
+                  {{ low }} cam. à recharger
+
+          # Multimédia
+          - type: custom:bubble-card
+            card_type: separator
+            name: Multimédia
+            icon: mdi:speaker
+          - type: custom:mushroom-media-player-card
+            entity: media_player.sonos_sonos
+            name: Sonos
+            icon: mdi:speaker
+            use_media_info: true
+            show_volume_level: true
+            media_controls:
+              - play_pause_stop
+              - previous
+              - next
+            volume_controls:
+              - volume_set
+              - volume_mute
+            collapsible_controls: true
+          - type: custom:mushroom-media-player-card
+            entity: media_player.echo_salon
+            name: Echo salon
+            icon: mdi:amazon-alexa
+            use_media_info: true
+            media_controls:
+              - play_pause_stop
+            volume_controls:
+              - volume_set
+            collapsible_controls: true
+          - type: custom:mushroom-media-player-card
+            entity: media_player.cinema_cinema
+            name: Cinéma
+            icon: mdi:television
+            media_controls:
+              - on_off
+            collapsible_controls: true
+
+          # Scènes rapides (à relier aux scripts HA quand ils existeront)
+          - type: custom:bubble-card
+            card_type: separator
+            name: Scènes
+            icon: mdi:movie-open-outline
+          - type: horizontal-stack
+            cards:
+              - type: custom:bubble-card
+                card_type: button
+                button_type: name
+                name: Bonne nuit
+                icon: mdi:weather-night
+                tap_action:
+                  action: perform-action
+                  perform_action: script.bonne_nuit
+              - type: custom:bubble-card
+                card_type: button
+                button_type: name
+                name: On part
+                icon: mdi:exit-run
+                tap_action:
+                  action: perform-action
+                  perform_action: script.on_part
+              - type: custom:bubble-card
+                card_type: button
+                button_type: name
+                name: Cinéma
+                icon: mdi:movie-roll
+                tap_action:
+                  action: perform-action
+                  perform_action: script.mode_cinema
+
+          # Liste de courses (helper todo à créer : Paramètres > Appareils > Helpers > Liste de tâches)
+          - type: todo-list
+            entity: todo.liste_de_courses
+            title: Liste de courses

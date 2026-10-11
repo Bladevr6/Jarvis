@@ -1,0 +1,55 @@
+# Thème « Jarvis » : fond sombre, cartes en verre fumé, accents bleu électrique.
+# Installation : voir dashboard/README.md
+Jarvis:
+  modes:
+    dark:
+      # Couleurs de base
+      primary-color: "#4f7cff"
+      accent-color: "#38bdf8"
+      primary-background-color: "#0b1020"
+      secondary-background-color: "#0f1629"
+      card-background-color: "rgba(22, 30, 54, 0.72)"
+      ha-card-background: "rgba(22, 30, 54, 0.72)"
+      ha-card-border-radius: "18px"
+      ha-card-border-width: "1px"
+      ha-card-border-color: "rgba(120, 150, 255, 0.18)"
+      ha-card-box-shadow: "0 8px 30px rgba(0, 0, 0, 0.35)"
+      divider-color: "rgba(120, 150, 255, 0.12)"
+      # Textes
+      primary-text-color: "#e6ecff"
+      secondary-text-color: "#93a0c4"
+      text-primary-color: "#ffffff"
+      disabled-text-color: "#5b6687"
+      # Icônes et états
+      paper-item-icon-color: "#93a0c4"
+      paper-item-icon-active-color: "#4f7cff"
+      state-icon-color: "#93a0c4"
+      state-icon-active-color: "#4f7cff"
+      switch-checked-color: "#4f7cff"
+      slider-color: "#4f7cff"
+      # Barres
+      app-header-background-color: "rgba(11, 16, 32, 0.85)"
+      app-header-text-color: "#e6ecff"
+      sidebar-background-color: "#0b1020"
+      sidebar-text-color: "#93a0c4"
+      sidebar-selected-icon-color: "#4f7cff"
+      sidebar-selected-text-color: "#e6ecff"
+      # Fond général : dégradé + grille discrète
+      lovelace-background: >-
+        radial-gradient(1200px 600px at 20% -10%, rgba(79,124,255,0.18), transparent 60%),
+        radial-gradient(900px 500px at 100% 0%, rgba(56,189,248,0.12), transparent 60%),
+        linear-gradient(rgba(120,150,255,0.04) 1px, transparent 1px) 0 0 / 40px 40px,
+        linear-gradient(90deg, rgba(120,150,255,0.04) 1px, transparent 1px) 0 0 / 40px 40px,
+        #0b1020
+      # Mushroom
+      mush-rgb-state-light: "255, 196, 77"
+      mush-rgb-state-cover: "79, 124, 255"
+      mush-rgb-state-media-player: "56, 189, 248"
+      mush-spacing: "12px"
+      mush-icon-border-radius: "14px"
+      mush-control-border-radius: "14px"
+      # Bubble Card
+      bubble-main-background-color: "rgba(22, 30, 54, 0.72)"
+      bubble-secondary-background-color: "rgba(79, 124, 255, 0.18)"
+      bubble-accent-color: "#4f7cff"
+      bubble-border-radius: "18px"

@@ -1,0 +1,121 @@
+# Package Home Assistant « Jarvis » : helpers et scripts utilisés par le tableau de bord.
+# Installation : voir dashboard/README.md
+input_text:
+  annonce_message:
+    name: Message à annoncer
+    max: 255
+    icon: mdi:message-text-outline
+
+input_select:
+  annonce_cible:
+    name: Cible de l'annonce
+    options:
+      - Partout
+      - Salon (Sonos)
+      - Echo salon
+      - Bureau
+      - Mia
+      - Echo Spot
+    initial: Partout
+    icon: mdi:bullhorn-outline
+
+script:
+  jarvis_annonce:
+    alias: Jarvis - annonce vocale
+    icon: mdi:bullhorn-outline
+    mode: queued
+    variables:
+      msg: "{{ states('input_text.annonce_message') }}"
+      cible: "{{ states('input_select.annonce_cible') }}"
+    sequence:
+      - choose:
+          - conditions: "{{ cible == 'Salon (Sonos)' }}"
+            sequence:
+              - action: tts.speak
+                target:
+                  entity_id: tts.openai_tts_jarvis
+                data:
+                  media_player_entity_id: media_player.sonos_sonos
+                  message: "{{ msg }}"
+          - conditions: "{{ cible == 'Echo salon' }}"
+            sequence:
+              - action: notify.alexa_media_echo_salon
+                data: {message: "{{ msg }}", data: {type: announce}}
+          - conditions: "{{ cible == 'Bureau' }}"
+            sequence:
+              - action: notify.alexa_media_bureau
+                data: {message: "{{ msg }}", data: {type: announce}}
+          - conditions: "{{ cible == 'Mia' }}"
+            sequence:
+              - action: notify.alexa_media_mia
+                data: {message: "{{ msg }}", data: {type: announce}}
+          - conditions: "{{ cible == 'Echo Spot' }}"
+            sequence:
+              - action: notify.alexa_media_echo_spot_osorio
+                data: {message: "{{ msg }}", data: {type: announce}}
+        default:
+          - action: notify.alexa_media_echo_salon
+            data: {message: "{{ msg }}", data: {type: announce}}
+          - action: notify.alexa_media_bureau
+            data: {message: "{{ msg }}", data: {type: announce}}
+          - action: notify.alexa_media_mia
+            data: {message: "{{ msg }}", data: {type: announce}}
+      - action: input_text.set_value
+        target: {entity_id: input_text.annonce_message}
+        data: {value: ""}
+
+  bonne_nuit:
+    alias: Bonne nuit
+    icon: mdi:weather-night
+    sequence:
+      - action: light.turn_off
+        target:
+          entity_id:
+            - light.salon
+            - light.salle_a_manger
+            - light.cuisine_1
+            - light.cuisine_2
+            - light.cuisine_3
+            - light.cuisine_4
+            - light.escalier
+      - action: media_player.turn_off
+        target: {entity_id: media_player.cinema_cinema}
+        continue_on_error: true
+      - action: cover.close_cover
+        target:
+          entity_id:
+            - cover.salon_salon_gauche
+            - cover.salon_salon_droite
+            - cover.salle_a_manger_salle_a_manger
+
+  on_part:
+    alias: On part
+    icon: mdi:exit-run
+    sequence:
+      - action: script.bonne_nuit
+      - action: cover.close_cover
+        target: {entity_id: cover.cuisine_cuisine}
+
+  mode_cinema:
+    alias: Mode cinéma
+    icon: mdi:movie-roll
+    sequence:
+      - action: cover.close_cover
+        target:
+          entity_id:
+            - cover.salon_salon_gauche
+            - cover.salon_salon_droite
+      - action: light.turn_on
+        target: {entity_id: light.salon}
+        data: {brightness_pct: 10}
+      - action: light.turn_off
+        target:
+          entity_id:
+            - light.cuisine_1
+            - light.cuisine_2
+            - light.cuisine_3
+            - light.cuisine_4
+            - light.salle_a_manger
+      - action: media_player.turn_on
+        target: {entity_id: media_player.cinema_cinema}
+        continue_on_error: true
