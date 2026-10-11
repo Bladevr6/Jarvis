@@ -183,6 +183,39 @@ views:
                     - font-size: 11px
                     - color: var(--secondary-text-color)
 
+          # Chauffage (Chaffoteaux via ChaffoLink / Ariston)
+          - type: custom:bubble-card
+            card_type: separator
+            name: Chauffage
+            icon: mdi:radiator
+          - type: thermostat
+            entity: climate.chaffolink
+            name: Chaudière
+            features:
+              - type: climate-hvac-modes
+                hvac_modes:
+                  - heat
+                  - 'off'
+          - type: custom:mushroom-chips-card
+            alignment: center
+            chips:
+              - type: entity
+                entity: sensor.chaffolink_ariston_outside_temp
+                name: Extérieur
+                icon: mdi:thermometer
+              - type: entity
+                entity: sensor.chaffolink_ariston_ch_flow_temp
+                name: Départ
+                icon: mdi:water-thermometer
+              - type: entity
+                entity: sensor.chaffolink_ariston_gas_consumption_for_water_last_month
+                name: Gaz ECS
+                icon: mdi:fire
+              - type: entity
+                entity: sensor.chaffolink_ariston_gas_consumption_for_heating_last_month
+                name: Gaz chauffage
+                icon: mdi:fire
+
           # Batteries et téléphones
           - type: custom:mushroom-entity-card
             entity: sensor.xiaomi_battery_level
