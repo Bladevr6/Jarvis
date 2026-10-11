@@ -181,7 +181,7 @@ views:
             entities:
               - calendar.osorio_jm87_gmail_com
               - calendar.anniversaires
-            initial_view: list
+            initial_view: listWeek
             card_mod:
               style: |
                 ha-card { height: 320px; }
