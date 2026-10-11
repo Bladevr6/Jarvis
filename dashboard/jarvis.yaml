@@ -122,7 +122,7 @@ views:
                     - font-size: 11px
                     - color: var(--secondary-text-color)
               - type: custom:button-card
-                entity: person.maman
+                entity: person.caro
                 name: Maman
                 show_entity_picture: true
                 show_state: true
