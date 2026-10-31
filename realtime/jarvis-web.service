@@ -1,0 +1,14 @@
+[Unit]
+Description=Jarvis tablette (page web + jetons OpenAI + outils)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=jarvis
+WorkingDirectory=/home/jarvis/jarvis/realtime
+ExecStart=/usr/bin/python3 -u /home/jarvis/jarvis/realtime/web.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

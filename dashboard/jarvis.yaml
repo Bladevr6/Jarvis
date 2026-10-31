@@ -255,6 +255,23 @@ views:
             name: Jarvis
             icon: mdi:robot-outline
 
+          # Parler à Jarvis (page web sur la tablette). Remplacer TAILNET par le nom réel :
+          # sur le Pi, "tailscale serve status" affiche l'adresse https://jarvis.xxxx.ts.net
+          - type: custom:bubble-card
+            card_type: button
+            button_type: name
+            name: Parler à Jarvis
+            icon: mdi:microphone-message
+            tap_action:
+              action: url
+              url_path: https://jarvis.TAILNET.ts.net/
+            styles: |
+              .bubble-button-card-container {
+                background: linear-gradient(90deg, rgba(56,189,248,0.35), rgba(79,124,255,0.35)) !important;
+                border: 1px solid rgba(120,150,255,0.45) !important;
+              }
+              .bubble-name { font-weight: 800; letter-spacing: 1px; text-transform: uppercase; }
+
           # Bouton Alexa annonce (ouvre une popup avec champ texte + cibles)
           - type: custom:bubble-card
             card_type: button

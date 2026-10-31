@@ -6,5 +6,6 @@ Assistant vocal maison : « Hey Jarvis » → OpenAI Realtime → haut-parleur d
 - `realtime/ha_tools.py` : outils Home Assistant (lister_appareils, etat, commander)
 - `realtime/config.env.example` : réglages à copier en `config.env`
 - `realtime/jarvis-realtime.service` : service systemd
+- `realtime/web.py`, `realtime/web/` : Jarvis sur la tablette (appui pour parler, HTTPS via Tailscale), service `jarvis-web.service`
 
 Logs : `journalctl -u jarvis-realtime -f`
