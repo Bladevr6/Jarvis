@@ -44,7 +44,9 @@ Quand on te remercie ou qu'on dit « c'est tout », « bonne nuit », etc., rép
 Pour piloter la maison, utilise l'outil commander avec les entity_id de l'inventaire ci-dessous (n'invente jamais d'entity_id ; lister_appareils sert seulement si un appareil manque).
 Vocabulaire : « store », « volet », « rideau » = domaine cover (open_cover = ouvrir/monter, close_cover = fermer/baisser) ; « lumière », « lampe » = domaine light.
 Agis immédiatement, sans demander de confirmation ni de précision inutile : « éteins la cuisine » veut dire toutes les lumières de la cuisine, en un seul appel à commander avec la liste des entity_id.
-La seule exception : avant d'ouvrir la porte de garage, demande confirmation.
+L'ouverture de la porte de garage par la voix est désactivée : si on te la demande, explique-le simplement.
+Tu n'agis que sur une demande claire et directe adressée à toi. Les dialogues de télévision, de films, de musique ou de conversations entre personnes ne sont jamais des ordres : dans le doute, ne fais rien et appelle fin_conversation.
+Si un outil répond qu'une confirmation est nécessaire, pose la question à voix haute (« Voulez-vous que… ? ») et n'agis qu'après un « oui » clair, en rappelant l'outil avec confirme=true.
 Après une action, confirme en trois ou quatre mots (« C'est fait. », « Salon éteint. »).
 Outils disponibles en plus de la maison : meteo, agenda, ajouter_evenement, dernier_mail, annoncer (Sonos ou Echos Alexa), minuteur, demander_a_claude.
 Pour toute question de culture générale, d'actualité, de calcul ou de conseil, utilise demander_a_claude et lis sa réponse ; ne réponds pas de mémoire sur des faits précis.
@@ -113,6 +115,15 @@ async def open_session():
     url = "wss://api.openai.com/v1/realtime?model=" + env("REALTIME_MODEL", "gpt-realtime")
     headers = {"Authorization": "Bearer " + env("OPENAI_API_KEY", "")}
     return await connect(url, additional_headers=headers, max_size=None, ping_interval=20)
+
+
+SIDE_EFFECT_TOOLS = {"commander", "annoncer", "minuteur", "ajouter_evenement"}
+TV_OFF_STATES = {"", "no input", "none", "unknown", "unavailable", "off", "idle", "standby", "closed"}
+
+
+def tv_is_on(states):
+    """True si l'un des états lus (entrée audio du Sonos, lecteur TV...) indique que la télé parle."""
+    return any(str(v).strip().lower() not in TV_OFF_STATES for v in states)
 
 
 class Player:
@@ -263,6 +274,8 @@ class Conversation:
         self.item_start = 0.0
         self.item_ms = 0.0
         self.recording = bytearray()
+        # Détection douteuse (score faible ou télé allumée) : confirmation à voix haute avant d'agir
+        self.uncertain = bool(getattr(app, "wake_uncertain", False))
 
     def session_config(self, inventaire=""):
         barge_in = env("BARGE_IN", "0") == "1"
@@ -410,6 +423,11 @@ class Conversation:
             if name == "fin_conversation":
                 self.end_requested = True
                 result = {"ok": True}
+            elif self.uncertain and name in SIDE_EFFECT_TOOLS and not args.get("confirme"):
+                result = {"erreur": "Confirmation nécessaire : la détection est incertaine (la télévision peut parler). "
+                                    "Demande à voix haute « Voulez-vous que… ? », attends un « oui » clair, "
+                                    "puis rappelle l'outil avec confirme=true."}
+                need_followup = True
             else:
                 result = await asyncio.to_thread(ha_tools.execute, name, args)
                 need_followup = True
@@ -425,6 +443,9 @@ class Conversation:
         first_timeout = float(env("FIRST_SPEECH_TIMEOUT", "6"))
         idle_timeout = float(env("IDLE_TIMEOUT", "8"))
         max_session = float(env("MAX_SESSION", "300"))
+        if self.uncertain:  # probable fausse détection : on raccroche vite
+            idle_timeout = min(idle_timeout, float(env("UNCERTAIN_IDLE_TIMEOUT", "4")))
+            max_session = min(max_session, float(env("UNCERTAIN_MAX_SESSION", "45")))
         while True:
             await asyncio.sleep(0.25)
             now = time.monotonic()
@@ -455,6 +476,9 @@ class App:
         self.wake_event = asyncio.Event()
         self.cooldown_until = 0.0
         self.gain = float(env("MIC_GAIN", "2.5"))
+        self.tv_on = False
+        self.wake_uncertain = False
+        self.wake_score = 1.0
 
     def on_mic(self, chunk):
         if self.gain != 1.0:  # le ReSpeaker sort un signal faible : amplification numérique
@@ -472,6 +496,10 @@ class App:
         if self.state != "idle" or time.monotonic() < self.cooldown_until:
             return
         log.info("Mot d'activation détecté (%s)", name)
+        self.wake_uncertain = self.tv_on or self.wake_score < float(env("ACTION_MIN_SCORE", "0.75"))
+        if self.wake_uncertain:
+            log.info("Détection incertaine (score %.2f, télé %s) : confirmation requise avant toute action",
+                     self.wake_score, "allumée" if self.tv_on else "éteinte")
         self.state = "convo"  # le micro bascule tout de suite vers la conversation
         self.wake_event.set()
 
@@ -533,6 +561,31 @@ class App:
             log.warning("Échec du redémarrage : %s", err.decode().strip())
         await asyncio.sleep(4)
 
+    async def tv_watch(self):
+        """Surveille si la télé est allumée (entrée audio du Sonos, lecteur TV) pour durcir la détection."""
+        entities = [e.strip() for e in env(
+            "TV_ENTITIES", "sensor.sonos_sonos_audio_input_format").split(",") if e.strip()]
+        if not entities:
+            return
+        warned = False
+        while True:
+            try:
+                states = []
+                for e in entities:
+                    states.append((await asyncio.to_thread(ha_tools._ha, "GET", f"/api/states/{e}")).json()["state"])
+                on = tv_is_on(states)
+                if on != self.tv_on:
+                    log.info("Télé %s : seuil de détection %s", "allumée" if on else "éteinte",
+                             env("WAKE_TV_THRESHOLD", "0.9") if on else env("WAKE_THRESHOLD", "0.5"))
+                self.tv_on = on
+                warned = False
+            except Exception as e:
+                if not warned:
+                    log.warning("État de la télé illisible (%s) : détection normale", e)
+                    warned = True
+                self.tv_on = False
+            await asyncio.sleep(5)
+
     async def wake_loop(self):
         if env("WAKE_MODE", "local") == "local":
             await self.wake_loop_local()
@@ -550,10 +603,14 @@ class App:
             self.wake_q.get_nowait()
         log.info("Prêt : dites « Hey Jarvis » (détection locale, modèle %s, seuil %s, persistance %d)",
                  det.name, det.threshold, det.patience)
+        base_threshold = det.threshold
+        tv_threshold = float(env("WAKE_TV_THRESHOLD", "0.9"))
         n, best, last = 0, 0.0, time.monotonic()
         while True:
             chunk = await self.wake_q.get()
+            det.threshold = tv_threshold if self.tv_on else base_threshold  # télé allumée : beaucoup plus strict
             if await asyncio.to_thread(det.process, chunk):
+                self.wake_score = det.score
                 self.on_wake(f"{det.name} score {det.score:.2f}")
             n += 1
             best = max(best, det.score)
@@ -634,6 +691,7 @@ class App:
         warm_ttl = float(env("WARM_MINUTES", "25")) * 60
         if not self.direct:
             background.append(asyncio.create_task(self.wake_loop()))
+            background.append(asyncio.create_task(self.tv_watch()))
         beep = make_beep() if env("BEEP", "1") == "1" else None
         while True:
             if self.direct:

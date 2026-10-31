@@ -74,9 +74,10 @@ def commander(domaine, service, entity_id, donnees=None, confirme=False):
     ids = [entity_id] if isinstance(entity_id, str) else list(entity_id)
     if not ids or not all(i.startswith(domaine + ".") for i in ids):
         return {"erreur": "entity_id ne correspond pas au domaine"}
-    if domaine == "cover" and service == "open_cover" and any("garage" in i for i in ids) and not confirme:
-        return {"erreur": "Confirmation requise : demande à l'utilisateur s'il confirme "
-                          "l'ouverture du garage, puis rappelle avec confirme=true."}
+    if (domaine == "cover" and service == "open_cover" and any("garage" in i for i in ids)
+            and os.environ.get("ALLOW_GARAGE_OPEN", "0") != "1"):
+        return {"erreur": "L'ouverture du garage par la voix est désactivée par sécurité. "
+                          "Utilise la télécommande ou l'application."}
     payload = dict(donnees or {})
     payload["entity_id"] = ids
     _ha("POST", f"/api/services/{domaine}/{service}", payload)
@@ -136,9 +137,19 @@ HANDLERS = {
 }
 
 
+CONFIRME_PARAM = {"type": "boolean", "description": "true seulement après un « oui » clair de l'utilisateur "
+                                                    "(requis quand l'outil demande une confirmation)"}
+SIDE_EFFECT_TOOLS = {"annoncer", "minuteur", "ajouter_evenement"}
+
+
 def all_tools():
+    import copy
     import extra_tools
-    return TOOLS + extra_tools.TOOLS
+    tools = copy.deepcopy(TOOLS + extra_tools.TOOLS)
+    for t in tools:
+        if t["name"] in SIDE_EFFECT_TOOLS:
+            t["parameters"]["properties"]["confirme"] = CONFIRME_PARAM
+    return tools
 
 
 def execute(name, args):
@@ -146,6 +157,8 @@ def execute(name, args):
     fn = HANDLERS.get(name) or extra_tools.HANDLERS.get(name)
     if fn is None:
         return {"erreur": f"outil inconnu : {name}"}
+    if name in SIDE_EFFECT_TOOLS:
+        args = {k: v for k, v in args.items() if k != "confirme"}
     try:
         return fn(**args)
     except requests.HTTPError as e:
